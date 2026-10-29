@@ -318,7 +318,7 @@ const routes = {
     rateLimit('register', clientIp(req), 5);
     const { nick, password } = await readJson(req);
     if (typeof nick !== 'string' || !NICK_RE.test(nick)) throw new HttpError(400, 'nick_invalid');
-    if (typeof password !== 'string' || password.length < 8) throw new HttpError(400, 'password_short');
+    if (typeof password !== 'string' || password.length < 4) throw new HttpError(400, 'password_short');
     if (password.length > 128) throw new HttpError(400, 'password_long');
     if (q.userByNick.get(nick)) throw new HttpError(409, 'nick_taken');
     const hash = await hashPassword(password);

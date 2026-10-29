@@ -54,7 +54,7 @@ function apiError(err) {
     case 'nick_invalid':
       return { message: 'Ник: 3–24 символа, только латинские буквы, цифры и _.', field: 'nick' };
     case 'password_short':
-      return { message: 'Пароль слишком короткий: нужно минимум 8 символов.', field: 'password' };
+      return { message: 'Пароль слишком короткий: нужно минимум 4 символа.', field: 'password' };
     case 'password_long':
       return { message: 'Пароль слишком длинный: не больше 128 символов.', field: 'password' };
     case 'auth_required':

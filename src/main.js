@@ -780,7 +780,7 @@ function renderRegister() {
     <section class="hero"><h1>Регистрация</h1></section>
     <form id="auth-form" class="form" novalidate>
       ${field({ id: 'nick', label: 'Ник', autocomplete: 'username', hint: '3–24 символа: латинские буквы, цифры и _', extra: 'autocapitalize="none" spellcheck="false" maxlength="24"' })}
-      ${field({ id: 'password', label: 'Пароль', type: 'password', autocomplete: 'new-password', hint: 'Минимум 8 символов' })}
+      ${field({ id: 'password', label: 'Пароль', type: 'password', autocomplete: 'new-password', hint: 'Минимум 4 символа' })}
       ${field({ id: 'password2', label: 'Повторите пароль', type: 'password', autocomplete: 'new-password' })}
       <p id="auth-error" class="form__error" role="alert" hidden></p>
       <button class="btn btn--primary" type="submit">Зарегистрироваться</button>
@@ -791,8 +791,8 @@ function renderRegister() {
     nick = nick.trim();
     if (!/^[A-Za-z0-9_]{3,24}$/.test(nick))
       throw { message: 'Ник: 3–24 символа, только латинские буквы, цифры и _.', field: 'nick' };
-    if (password.length < 8)
-      throw { message: 'Пароль слишком короткий: нужно минимум 8 символов.', field: 'password' };
+    if (password.length < 4)
+      throw { message: 'Пароль слишком короткий: нужно минимум 4 символа.', field: 'password' };
     if (password !== password2) throw { message: 'Пароли не совпадают.', field: 'password2' };
 
     await register(nick, password);
