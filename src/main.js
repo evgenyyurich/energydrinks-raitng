@@ -95,25 +95,58 @@ const drinkSorts = {
 
 const drinkFilter = { q: '', sort: 'rating' };
 
+// Балл для карточки рейтинга: число видно всегда, цвет — лишь дополнение.
+const rankScore = (d) => `
+  <div class="score rank-score ${scoreClass(d.avg)}">
+    <span class="rank-score__value"><strong>${formatScore(d.avg)}</strong>${d.avg === null ? '' : '<span class="rank-score__max">/10</span>'}</span>
+    <small>${d.votes ? votesLabel(d.votes) : 'нет оценок'}</small>
+  </div>`;
+
+const rankCard = (d, i) => `
+  <li>
+    <a class="card card--link card--drink" href="#/d/${d.id}">
+      <span class="card__rank">${i + 1}</span>
+      <span class="card__media">${thumb(d)}</span>
+      <div class="card__body">
+        <h2 class="card__name">${escape(d.name)}</h2>
+        <p class="card__brand">${escape(d.brand)}</p>
+        ${d.avgPrice !== null || d.sugarFree ? `<p class="card__meta">${d.avgPrice !== null ? `<span>≈ ${formatPrice(d.avgPrice)}</span>` : ''}${d.sugarFree ? '<span class="tag">без сахара</span>' : ''}</p>` : ''}
+      </div>
+      ${rankScore(d)}
+    </a>
+  </li>`;
+
 function renderDrinks() {
+  const canAdd = Boolean(currentUser());
   app.innerHTML = `
-    <section class="hero">
-      <h1>Рейтинг энергетиков</h1>
-      <p class="muted">Средний балл по оценкам всех участников.</p>
+    <section class="hero hero--ranking">
+      <div class="hero__text">
+        <h1>Рейтинг энергетиков</h1>
+        <p class="muted">Средний балл по оценкам всех участников.</p>
+      </div>
+      ${canAdd ? '<a class="btn btn--primary hero__add" href="#/add">+ Добавить энергетик</a>' : ''}
     </section>
-    <section class="controls">
-      <input id="search" class="input" type="search" placeholder="Поиск по названию или бренду" autocomplete="off" />
-      <select id="sort" class="input">
-        <option value="rating">По рейтингу</option>
-        <option value="votes">По числу оценок</option>
-        <option value="name">По названию</option>
-        <option value="price">По цене</option>
-      </select>
+    <section class="controls" ${drinks.length ? '' : 'hidden'}>
+      <div class="search">
+        <label class="visually-hidden" for="search">Поиск по названию или бренду</label>
+        <svg class="search__icon" aria-hidden="true" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="9" r="6"/><path d="M14 14l4 4"/></svg>
+        <input id="search" class="input" type="search" placeholder="Поиск по названию или бренду" autocomplete="off" />
+      </div>
+      <div class="sortbox">
+        <label class="visually-hidden" for="sort">Сортировка</label>
+        <select id="sort" class="input">
+          <option value="rating">По рейтингу</option>
+          <option value="votes">По числу оценок</option>
+          <option value="name">По названию</option>
+          <option value="price">По цене</option>
+        </select>
+      </div>
     </section>
+    <p id="count" class="rank-count muted" aria-live="polite"></p>
     <ol id="list" class="list"></ol>
-    <p id="empty" class="muted empty" hidden>Ничего не нашлось.</p>
+    <div id="empty" hidden></div>
     ${
-      currentUser()
+      canAdd
         ? `<div class="action-spacer" aria-hidden="true"></div>
     <div class="action-bar"><div class="action-bar__inner"><a class="btn btn--primary action-bar__btn" href="#/add">+ Добавить энергетик</a></div></div>`
         : ''
@@ -123,6 +156,7 @@ function renderDrinks() {
   const sort = document.getElementById('sort');
   const list = document.getElementById('list');
   const empty = document.getElementById('empty');
+  const count = document.getElementById('count');
   search.value = drinkFilter.q;
   sort.value = drinkFilter.sort;
 
@@ -135,28 +169,29 @@ function renderDrinks() {
       .sort(drinkSorts[sort.value]);
 
     empty.hidden = items.length > 0;
-    list.innerHTML = items
-      .map(
-        (d, i) => `
-        <li>
-         <a class="card card--link" href="#/d/${d.id}">
-          <span class="card__rank">${i + 1}</span>
-          ${thumb(d)}
-          <div class="card__body">
-            <h2 class="card__name">${escape(d.name)}</h2>
-            <p class="card__meta">
-              <span>${escape(d.brand)}</span>
-              ${d.avgPrice !== null ? `<span>≈ ${formatPrice(d.avgPrice)}</span>` : ''}
-              ${d.sugarFree ? '<span class="tag">без сахара</span>' : ''}
-            </p>
-          </div>
-          ${scoreBox(d.avg, votesLabel(d.votes))}
-         </a>
-        </li>`,
-      )
-      .join('');
+    if (!items.length) {
+      empty.innerHTML = drinks.length
+        ? `<div class="empty-state">
+            <h2 class="empty-state__title">Ничего не нашлось</h2>
+            <p class="empty-state__text">По запросу «${escape(search.value.trim())}» энергетиков нет. Попробуйте изменить запрос.</p>
+            <button type="button" class="btn empty-state__action" id="reset-search">Сбросить поиск</button>
+          </div>`
+        : `<div class="empty-state">
+            <h2 class="empty-state__title">Пока нет энергетиков</h2>
+            <p class="empty-state__text">В рейтинге ещё ничего нет.</p>
+            ${canAdd ? '<a class="btn btn--primary empty-state__action" href="#/add">Добавить энергетик</a>' : ''}
+          </div>`;
+    }
+    count.textContent = q && items.length ? `Найдено: ${items.length}` : '';
+    list.innerHTML = items.map(rankCard).join('');
   };
 
+  empty.addEventListener('click', (e) => {
+    if (!e.target.closest('#reset-search')) return;
+    search.value = '';
+    update();
+    search.focus();
+  });
   search.addEventListener('input', update);
   sort.addEventListener('change', update);
   update();
@@ -317,104 +352,224 @@ function renderDrink(id) {
   app.innerHTML = `
     <div class="drink-top">
     ${drink.image ? `<div class="drink-bg" aria-hidden="true"><div style="background-image:url('${escape(drink.image)}')"></div></div>` : ''}
-    <a class="link back" href="#/">← Все энергетики</a>
-    ${takeNotice()}
-    <section class="drink">
+    <div class="drink-bar">
+      <a class="link back" href="#/">← Все энергетики</a>
       ${
-        drink.image
-          ? `<button type="button" class="drink__photo drink__photo--zoom" id="photo-open" aria-label="Открыть фото"><img src="${escape(drink.image)}" alt="${escape(drink.name)}" /></button>`
-          : `<div class="drink__photo">${bigCan(drink)}</div>`
+        owner
+          ? `<div class="drink-menu">
+               <button type="button" class="btn btn--ghost drink-menu__btn" id="owner-menu-btn" aria-label="Действия с энергетиком" aria-haspopup="menu" aria-expanded="false" aria-controls="owner-menu">⋯</button>
+               <div class="drink-menu__list" id="owner-menu" role="menu" aria-label="Действия с энергетиком" hidden>
+                 <a class="drink-menu__item" role="menuitem" href="#/d/${id}/edit">Редактировать</a>
+                 <button class="drink-menu__item" role="menuitem" type="button" id="drink-delete">Удалить энергетик</button>
+               </div>
+             </div>`
+          : ''
       }
-      <div class="drink__info">
-        <h1 class="drink__name">${escape(drink.name)}</h1>
-        <p class="muted drink__brand">${escape(drink.brand)}</p>
-        ${drink.avgPrice !== null ? `<p class="card__meta"><span>Средняя цена ≈ ${formatPrice(drink.avgPrice)} · по ${drink.priceCount} ${drink.priceCount % 10 === 1 && drink.priceCount % 100 !== 11 ? 'цене' : 'ценам'}</span></p>` : ''}
-        ${drink.sugarFree ? '<p class="card__meta"><span class="tag">без сахара</span></p>' : ''}
-      </div>
-      ${scoreBox(drink.avg, votesLabel(drink.votes))}
-    </section>
+    </div>
+    <div class="drink-layout">
+      <section class="drink-main">
+        ${
+          drink.image
+            ? `<button type="button" class="drink__photo drink__photo--zoom" id="photo-open" aria-label="Открыть фото"><img src="${escape(drink.image)}" alt="${escape(drink.name)}" /></button>`
+            : `<div class="drink__photo drink__photo--can">${bigCan(drink)}</div>`
+        }
+        <div class="drink__text">
+        <div class="drink__info">
+          <h1 class="drink__name">${escape(drink.name)}</h1>
+          <p class="muted drink__brand">${escape(drink.brand)}</p>
+          ${
+            drink.avgPrice !== null || drink.sugarFree
+              ? `<ul class="drink__facts">
+                   ${drink.avgPrice !== null ? `<li>Средняя цена ≈ ${formatPrice(drink.avgPrice)} · по ${plural(drink.priceCount, 'цене', 'ценам', 'ценам')}</li>` : ''}
+                   ${drink.sugarFree ? '<li><span class="tag">без сахара</span></li>' : ''}
+                 </ul>`
+              : ''
+          }
+        </div>
+        <div class="drink__rating">
+          ${
+            drink.votes
+              ? `<p class="drink__avg ${scoreClass(drink.avg)}"><strong>${formatScore(drink.avg)}</strong><span>/ 10</span></p>
+                 <p class="muted">Средняя оценка · ${votesLabel(drink.votes)}</p>`
+              : `<p class="drink__rating-empty">Ещё нет оценок</p>
+                 ${me ? '<p class="muted">Будьте первым — поставьте оценку в блоке «Моя оценка».</p>' : ''}`
+          }
+        </div>
+        </div>
+      </section>
+
+      <section class="drink-aside rate" id="my-rating" aria-labelledby="my-rating-title">
+        <h2 class="block__title" id="my-rating-title">Моя оценка</h2>
+        ${takeNotice()}
+        ${
+          me
+            ? `<form id="rate-form" class="form" novalidate>
+                 <div class="field slider ${mine ? '' : 'slider--unset'}">
+                   <label class="field__label" for="score">Оценка от 1 до 10</label>
+                   <div class="rate__head">
+                     <p class="slider__value ${mine ? scoreClass(mine.score) : 'score--none'}" id="score-value" aria-hidden="true">${
+                       mine ? `<strong>${mine.score}</strong> / 10` : '<strong>—</strong> / 10'
+                     }</p>
+                     <p class="rate__status" id="rate-status" data-state="${mine ? 'saved' : 'none'}">${mine ? 'Сохранено' : 'Оценка не выбрана'}</p>
+                   </div>
+                   <input id="score" name="score" class="slider__input" type="range" min="1" max="10" step="1" value="${mine?.score ?? 5}" ${mine ? '' : 'aria-valuetext="не выбрана"'} />
+                   <div class="slider__ticks" aria-hidden="true">${Array.from({ length: 10 }, (_, i) => `<span data-v="${i + 1}" style="--i:${i}"${mine && mine.score === i + 1 ? ' class="is-active"' : ''}>${i + 1}</span>`).join('')}</div>
+                 </div>
+                 <div class="field">
+                   <label class="field__label" for="store">Где куплен</label>
+                   <input id="store" name="store" class="input" type="text" maxlength="100" list="stores" autocomplete="off" aria-describedby="store-hint" value="${escape(mine?.store ?? '')}" />
+                   <span class="field__hint muted" id="store-hint">необязательно</span>
+                   <datalist id="stores">${uniqueStores().map((s) => `<option value="${escape(s)}"></option>`).join('')}</datalist>
+                 </div>
+                 <div class="field">
+                   <label class="field__label" for="price">Цена, ₽</label>
+                   <input id="price" name="price" class="input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" aria-describedby="price-hint price-error" value="${mine?.price ?? ''}" />
+                   <span class="field__hint muted" id="price-hint">необязательно</span>
+                   <p class="field__error" id="price-error" hidden></p>
+                 </div>
+                 <p id="rate-error" class="form__error" role="alert" hidden></p>
+                 <div class="actions">
+                   <button class="btn btn--primary" type="submit" id="rate-submit">${mine ? 'Обновить оценку' : 'Сохранить оценку'}</button>
+                   ${mine ? '<button class="btn btn--ghost" type="button" id="rate-delete">Удалить оценку</button>' : ''}
+                 </div>
+               </form>`
+            : `<div class="rate__guest">
+                 <p class="muted">Оценки могут ставить только вошедшие пользователи.</p>
+                 <a class="btn btn--primary" href="#/login">Войдите, чтобы оценить</a>
+               </div>`
+        }
+      </section>
+
+      <section class="drink-all">
+        <h2 class="block__title">Все оценки · ${all.length}</h2>
+        ${
+          all.length
+            ? `<ol class="list">
+                ${all
+                  .map(
+                    (r) => `
+                  <li class="card card--rating">
+                    <a class="card__user" href="#/u/${encodeURIComponent(r.user.nick)}">
+                      ${avatar(r.user)}
+                      <span class="card__body">
+                        <span class="card__name">${displayName(r.user)}${nickTag(r.user)}</span>
+                        ${r.store || r.price != null ? `<span class="card__meta"><span>${purchaseLabel(r)}</span></span>` : ''}
+                      </span>
+                    </a>
+                    ${scoreBox(r.score, 'оценка')}
+                  </li>`,
+                  )
+                  .join('')}
+              </ol>`
+            : `<div class="empty-state">
+                 <p class="empty-state__title">Пока никто не оценил</p>
+                 <p class="empty-state__text">Оценки участников появятся здесь.</p>
+               </div>`
+        }
+      </section>
+    </div>
+    </div>
     ${
       owner
-        ? `<div class="actions">
-             <a class="btn btn--ghost" href="#/d/${id}/edit">Редактировать</a>
-             <button class="btn btn--ghost btn--danger" type="button" id="drink-delete">Удалить энергетик</button>
-           </div>
-           <p id="owner-error" class="form__error" role="alert" hidden></p>`
+        ? `<dialog class="confirm" id="delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-text">
+             <h2 class="confirm__title" id="delete-title">Удалить «${escape(drink.name)}»?</h2>
+             <p class="confirm__text muted" id="delete-text">${all.length ? `Вместе с ним ${all.length % 10 === 1 && all.length % 100 !== 11 ? 'удалится' : 'удалятся'} ${votesLabel(all.length)}. ` : ''}Это нельзя отменить.</p>
+             <p id="delete-error" class="form__error" role="alert" hidden></p>
+             <div class="actions">
+               <button class="btn btn--ghost" type="button" id="delete-cancel" autofocus>Отмена</button>
+               <button class="btn btn--danger" type="button" id="delete-confirm">Удалить</button>
+             </div>
+           </dialog>`
         : ''
-    }
-
-    <section class="block" id="my-rating">
-      <h2 class="block__title">Моя оценка</h2>
-      ${
-        me
-          ? `<form id="rate-form" class="form" novalidate>
-               <div class="field slider ${mine ? '' : 'slider--unset'}">
-                 <label class="field__label" for="score">Оценка от 1 до 10</label>
-                 <p class="slider__value ${mine ? scoreClass(mine.score) : 'score--none'}" id="score-value" aria-hidden="true">${
-                   mine ? `<strong>${mine.score}</strong> / 10` : '<strong>—</strong> / 10'
-                 }</p>
-                 <input id="score" name="score" class="slider__input" type="range" min="1" max="10" step="1" value="${mine?.score ?? 5}" ${mine ? '' : 'aria-valuetext="не выбрана"'} />
-                 <div class="slider__ticks" aria-hidden="true">${Array.from({ length: 10 }, (_, i) => `<span data-v="${i + 1}"${mine && mine.score === i + 1 ? ' class="is-active"' : ''}>${i + 1}</span>`).join('')}</div>
-               </div>
-               <div class="field">
-                 <label class="field__label" for="store">Где куплен (необязательно)</label>
-                 <input id="store" name="store" class="input" type="text" maxlength="100" list="stores" autocomplete="off" value="${escape(mine?.store ?? '')}" />
-                 <datalist id="stores">${uniqueStores().map((s) => `<option value="${escape(s)}"></option>`).join('')}</datalist>
-               </div>
-               <div class="field">
-                 <label class="field__label" for="price">Цена, ₽ (необязательно)</label>
-                 <input id="price" name="price" class="input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" value="${mine?.price ?? ''}" />
-               </div>
-               <p id="rate-error" class="form__error" role="alert" hidden></p>
-               <div class="actions">
-                 <button class="btn btn--primary" type="submit">${mine ? 'Обновить оценку' : 'Сохранить оценку'}</button>
-                 ${mine ? '<button class="btn btn--ghost btn--danger" type="button" id="rate-delete">Удалить оценку</button>' : ''}
-               </div>
-             </form>`
-          : '<p><a class="btn btn--primary" href="#/login">Войдите, чтобы оценить</a></p>'
-      }
-    </section>
-    </div>
-
-    <section class="block">
-      <h2 class="block__title">Все оценки · ${all.length}</h2>
-      ${
-        all.length
-          ? `<ol class="list">
-              ${all
-                .map(
-                  (r) => `
-                <li class="card card--rating">
-                  <a class="card__user" href="#/u/${encodeURIComponent(r.user.nick)}">
-                    ${avatar(r.user)}
-                    <span class="card__body">
-                      <span class="card__name">${displayName(r.user)}${nickTag(r.user)}</span>
-                      ${r.store || r.price != null ? `<span class="card__meta"><span>${purchaseLabel(r)}</span></span>` : ''}
-                    </span>
-                  </a>
-                  ${scoreBox(r.score, 'оценка')}
-                </li>`,
-                )
-                .join('')}
-            </ol>`
-          : '<p class="muted empty">Пока никто не оценил.</p>'
-      }
-    </section>`;
+    }`;
 
   document.getElementById('photo-open')?.addEventListener('click', (e) => openLightbox(drink.image, drink.name, e.currentTarget));
+
+  // Меню «⋯»: закрывается по Esc (фокус возвращается на кнопку), клику вне и смене маршрута.
+  const menuBtn = document.getElementById('owner-menu-btn');
+  const menu = document.getElementById('owner-menu');
+  if (menuBtn) {
+    const items = () => [...menu.querySelectorAll('[role="menuitem"]')];
+    const closeMenu = (refocus) => {
+      document.removeEventListener('click', onDocClick);
+      document.removeEventListener('keydown', onMenuKey);
+      window.removeEventListener('hashchange', onHash);
+      menu.hidden = true;
+      menuBtn.setAttribute('aria-expanded', 'false');
+      if (refocus) menuBtn.focus();
+    };
+    const onHash = () => closeMenu(false);
+    const onDocClick = (e) => {
+      if (!menuBtn.isConnected || (!menu.contains(e.target) && !menuBtn.contains(e.target))) closeMenu(false);
+    };
+    const onMenuKey = (e) => {
+      if (e.key === 'Escape') closeMenu(true);
+      else if (e.key === 'Tab') closeMenu(false);
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const list = items();
+        const i = list.indexOf(document.activeElement);
+        list[(i + (e.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length].focus();
+      }
+    };
+    menuBtn.addEventListener('click', () => {
+      if (!menu.hidden) return closeMenu(true);
+      menu.hidden = false;
+      menuBtn.setAttribute('aria-expanded', 'true');
+      document.addEventListener('click', onDocClick);
+      document.addEventListener('keydown', onMenuKey);
+      window.addEventListener('hashchange', onHash);
+      items()[0].focus();
+    });
+
+    // Удаление энергетика: подтверждение в нативном <dialog>.
+    const dialog = document.getElementById('delete-dialog');
+    const delError = document.getElementById('delete-error');
+    const confirmBtn = document.getElementById('delete-confirm');
+    document.getElementById('drink-delete').addEventListener('click', () => {
+      closeMenu(false);
+      delError.hidden = true;
+      dialog.showModal();
+      document.getElementById('delete-cancel').focus();
+    });
+    document.getElementById('delete-cancel').addEventListener('click', () => dialog.close());
+    dialog.addEventListener('click', (e) => {
+      if (e.target === dialog) dialog.close();
+    });
+    dialog.addEventListener('close', () => {
+      if (menuBtn.isConnected) menuBtn.focus();
+    });
+    confirmBtn.addEventListener('click', async () => {
+      delError.hidden = true;
+      confirmBtn.setAttribute('aria-busy', 'true');
+      await busy(dialog, async () => {
+        try {
+          await deleteDrink(id);
+          ({ drinks, users, ratings } = await loadData());
+          location.hash = '#/';
+        } catch (err) {
+          showError(delError, err);
+        }
+      });
+      confirmBtn.removeAttribute('aria-busy');
+    });
+  }
 
   const form = document.getElementById('rate-form');
   if (form) {
     const error = document.getElementById('rate-error');
     const slider = document.getElementById('score');
     const shown = document.getElementById('score-value');
-    const saveBtn = form.querySelector('button[type="submit"]');
+    const statusEl = document.getElementById('rate-status');
+    const storeEl = document.getElementById('store');
+    const priceEl = document.getElementById('price');
+    const priceError = document.getElementById('price-error');
+    const saveBtn = document.getElementById('rate-submit');
     let chosen = !!mine;
     saveBtn.disabled = !chosen;
     // Оценка «выбрана», только когда пользователь тронул ползунок: случайное значение по умолчанию не сохраняем.
     const sliderBox = form.querySelector('.slider');
     const ticks = sliderBox.querySelectorAll('.slider__ticks span');
-    let lastShown = mine ? mine.score : null;
     // Заливка и цвет бегунка: --fill в процентах, --hue плавно идёт от красного (1) к зелёному (10).
     const paint = (v) => {
       const p = ((v - 1) / 9) * 100;
@@ -424,6 +579,17 @@ function renderDrink(id) {
       sliderBox.style.setProperty('--hue', Math.round(((v - 1) / 9) * 125));
     };
     paint(Number(slider.value));
+    // Статус: «Сохранено» / «Не сохранено» / «Есть несохранённые изменения» / «Оценка не выбрана» — без перерисовки страницы.
+    const refreshStatus = () => {
+      const changed =
+        !!mine &&
+        (Number(slider.value) !== mine.score ||
+          storeEl.value.trim() !== (mine.store ?? '') ||
+          priceEl.value.trim() !== String(mine.price ?? ''));
+      const state = mine ? (changed ? 'dirty' : 'saved') : chosen ? 'dirty' : 'none';
+      statusEl.dataset.state = state;
+      statusEl.textContent = state === 'saved' ? 'Сохранено' : state === 'none' ? 'Оценка не выбрана' : mine ? 'Есть несохранённые изменения' : 'Не сохранено';
+    };
     const choose = () => {
       const v = Number(slider.value);
       chosen = true;
@@ -434,12 +600,7 @@ function renderDrink(id) {
       shown.className = `slider__value ${scoreClass(v)}`;
       shown.innerHTML = `<strong>${v}</strong> / 10`;
       slider.setAttribute('aria-valuetext', `${v} из 10`);
-      if (v !== lastShown) {
-        lastShown = v;
-        const num = shown.firstElementChild;
-        num.classList.add('bump');
-        num.addEventListener('animationend', () => num.classList.remove('bump'), { once: true });
-      }
+      refreshStatus();
     };
     ticks.forEach((t) =>
       t.addEventListener('click', () => {
@@ -453,10 +614,25 @@ function renderDrink(id) {
     slider.addEventListener('keydown', (e) => {
       if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End') setTimeout(choose);
     });
+    storeEl.addEventListener('input', refreshStatus);
+    priceEl.addEventListener('input', () => {
+      priceError.hidden = true;
+      priceEl.removeAttribute('aria-invalid');
+      refreshStatus();
+    });
     if (mine) slider.setAttribute('aria-valuetext', `${mine.score} из 10`);
+    // После сохранения страница перерисовывается: возвращаем прокрутку и фокус, чтобы ничего не прыгало.
+    const rerender = async (focusId) => {
+      const y = window.scrollY;
+      await reload();
+      window.scrollTo(0, y);
+      document.getElementById(focusId)?.focus({ preventScroll: true });
+    };
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       error.hidden = true;
+      priceError.hidden = true;
+      priceEl.removeAttribute('aria-invalid');
       const data = new FormData(form);
       const score = Number(data.get('score'));
       if (!chosen || !score) return showError(error, { message: 'Выберите оценку от 1 до 10.' });
@@ -464,46 +640,42 @@ function renderDrink(id) {
       let price = null;
       if (priceRaw) {
         price = /^[0-9]{1,4}$/.test(priceRaw) ? Number(priceRaw) : NaN;
-        if (!(price >= 1 && price <= 5000)) return showError(error, { message: 'Цена — целое число рублей от 1 до 5000.' });
+        if (!(price >= 1 && price <= 5000)) {
+          priceError.textContent = 'Цена — целое число рублей от 1 до 5000.';
+          priceError.hidden = false;
+          priceEl.setAttribute('aria-invalid', 'true');
+          priceEl.focus();
+          return;
+        }
       }
+      saveBtn.setAttribute('aria-busy', 'true');
       await busy(form, async () => {
         try {
           await rate(id, score, String(data.get('store') || '').trim(), price);
           notice = 'Оценка сохранена.';
-          await reload();
+          await rerender('rate-submit');
         } catch (err) {
           showError(error, err);
         }
       });
+      saveBtn.removeAttribute('aria-busy');
     });
-    document.getElementById('rate-delete')?.addEventListener('click', () =>
-      busy(form, async () => {
-        error.hidden = true;
+    const delBtn = document.getElementById('rate-delete');
+    delBtn?.addEventListener('click', async () => {
+      error.hidden = true;
+      delBtn.setAttribute('aria-busy', 'true');
+      await busy(form, async () => {
         try {
           await unrate(id);
           notice = 'Оценка удалена.';
-          await reload();
+          await rerender('score');
         } catch (err) {
           showError(error, err);
         }
-      }),
-    );
+      });
+      delBtn.removeAttribute('aria-busy');
+    });
   }
-
-  document.getElementById('drink-delete')?.addEventListener('click', async (e) => {
-    if (!confirm(`Удалить «${drink.name}» вместе со всеми оценками?`)) return;
-    const error = document.getElementById('owner-error');
-    error.hidden = true;
-    e.target.disabled = true;
-    try {
-      await deleteDrink(id);
-      ({ drinks, users, ratings } = await loadData());
-      location.hash = '#/';
-    } catch (err) {
-      showError(error, err);
-      e.target.disabled = false;
-    }
-  });
 }
 
 // Просмотр фото целиком. Закрывается по подложке, крестику, Esc и смене маршрута.
@@ -541,6 +713,132 @@ function openLightbox(src, name, opener) {
 // ---------- Добавление и правка энергетика ----------
 
 const CAN_COLORS = ['#1e3a8a', '#166534', '#b91c1c', '#7c2d12', '#ca8a04', '#4c1d95', '#111827', '#9ca3af', '#0e7490', '#be185d'];
+const CAN_COLOR_NAMES = {
+  '#1e3a8a': 'Синий', '#166534': 'Зелёный', '#b91c1c': 'Красный', '#7c2d12': 'Коричневый', '#ca8a04': 'Жёлтый',
+  '#4c1d95': 'Фиолетовый', '#111827': 'Чёрный', '#9ca3af': 'Серебристый', '#0e7490': 'Бирюзовый', '#be185d': 'Розовый',
+};
+
+// Светлота цвета (0..1): на светлых плашках галочка тёмная, на тёмных — белая.
+function isLightColor(hex) {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.28;
+}
+
+const CHECK_ICON =
+  '<svg class="swatch__check" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const PHOTO_ICON =
+  '<svg class="uploader__icon" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" focusable="false"><path d="M4 7h3l1.5-2h7L17 7h3a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.6" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>';
+
+const MAX_SOURCE_PHOTO = 25 * 1024 * 1024;
+
+// Загрузчик фото: скрытый input[type=file] + собственный интерфейс (кнопки открывают выбор файла).
+function uploaderHtml({ id, compact = false }) {
+  return `<div class="uploader${compact ? ' uploader--compact' : ''}" id="${id}-uploader">
+    <input id="${id}" class="visually-hidden" type="file" accept="image/*" tabindex="-1" aria-describedby="${id}-error" />
+    <div class="uploader__stage"></div>
+    <p class="field__error" id="${id}-error" role="alert" hidden></p>
+  </div>`;
+}
+
+// Состояния: пусто / обработка / выбран новый файл / текущее фото (при правке) / текущее фото помечено к удалению.
+// Готовый (уже уменьшенный) blob хранится в `blob` и отправляется как есть — повторно не сжимается.
+function mountUploader(id, { existing = null, compact = false, prepare, title, hint, onChange }) {
+  const box = document.getElementById(`${id}-uploader`);
+  const input = document.getElementById(id);
+  const stage = box.querySelector('.uploader__stage');
+  const errorEl = document.getElementById(`${id}-error`);
+  let removed = false;
+  let picked = null; // { blob, url }
+  let working = false;
+  let token = 0;
+
+  const hasPhoto = () => !!picked || (!!existing && !removed);
+  const setError = (message) => {
+    if (message) showError(errorEl, { message });
+    else errorEl.hidden = true;
+  };
+  const freePicked = () => {
+    if (picked) URL.revokeObjectURL(picked.url);
+    picked = null;
+  };
+
+  function render(focus = false) {
+    let html;
+    if (working) {
+      html = `<div class="uploader__drop uploader__drop--busy" role="status">${PHOTO_ICON}<span>Обрабатываем фото…</span></div>`;
+    } else if (hasPhoto()) {
+      const src = picked ? picked.url : escape(existing);
+      html = `<div class="uploader__preview"><img src="${src}" alt="${picked ? 'Выбранное фото' : 'Текущее фото'}" /></div>
+        <div class="uploader__actions">
+          <button class="btn btn--sm" type="button" data-act="pick">Заменить</button>
+          <button class="btn btn--ghost btn--sm" type="button" data-act="${picked ? 'drop' : 'remove'}">${picked ? 'Убрать' : 'Удалить фото'}</button>
+        </div>`;
+    } else {
+      html = `<button class="uploader__drop" type="button" data-act="pick">
+          ${PHOTO_ICON}<strong>${title}</strong><span class="uploader__hint">${hint}</span>
+        </button>
+        ${existing && removed ? '<p class="uploader__note">Текущее фото будет удалено при сохранении. <button class="uploader__undo" type="button" data-act="undo">Отменить</button></p>' : ''}`;
+    }
+    stage.innerHTML = html;
+    if (focus) stage.querySelector('[data-act]')?.focus();
+  }
+
+  stage.addEventListener('click', (e) => {
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (!act) return;
+    if (act === 'pick') return input.click();
+    setError('');
+    if (act === 'drop') freePicked();
+    if (act === 'remove') removed = true;
+    if (act === 'undo') removed = false;
+    render(true);
+    onChange?.();
+  });
+
+  input.addEventListener('change', async () => {
+    const file = input.files[0];
+    input.value = ''; // тот же файл можно выбрать повторно
+    if (!file) return;
+    setError('');
+    if (file.type && !file.type.startsWith('image/')) return setError('Это не изображение. Выберите JPEG, PNG или WebP.');
+    if (file.size > MAX_SOURCE_PHOTO) return setError('Файл слишком большой (больше 25 МБ).');
+    const mine = ++token;
+    working = true;
+    render();
+    onChange?.();
+    try {
+      const blob = await prepare(file);
+      if (mine !== token) return;
+      freePicked();
+      picked = { blob, url: URL.createObjectURL(blob) };
+    } catch (err) {
+      if (mine !== token) return;
+      setError(err?.message || 'Не удалось обработать фото. Выберите другое.');
+    } finally {
+      if (mine === token) {
+        working = false;
+        render(true);
+        onChange?.();
+      }
+    }
+  });
+
+  const destroy = () => {
+    token++;
+    freePicked();
+  };
+  window.addEventListener('hashchange', destroy, { once: true });
+  render();
+
+  return {
+    get blob() { return picked?.blob ?? null; },
+    get removed() { return !!existing && removed && !picked; },
+    get hasPhoto() { return hasPhoto(); },
+    get working() { return working; },
+    setError,
+    destroy,
+  };
+}
 
 // drink === null — добавление, иначе правка существующего (только автор).
 function renderDrinkForm(drink) {
@@ -563,63 +861,56 @@ function renderDrinkForm(drink) {
     <section class="hero"><h1>${editing ? 'Редактировать энергетик' : 'Новый энергетик'}</h1></section>
     <form id="drink-form" class="form" novalidate>
       ${field({ id: 'name', label: 'Название', autocomplete: 'off', extra: `maxlength="60" required value="${escape(drink?.name ?? '')}"` })}
-      <div class="field">
-        <label class="field__label" for="brand">Бренд</label>
-        <input id="brand" name="brand" class="input" type="text" autocomplete="off" maxlength="40" required list="brands" value="${escape(drink?.brand ?? '')}" />
-        <datalist id="brands">${brands.map((b) => `<option value="${escape(b)}"></option>`).join('')}</datalist>
-      </div>
+      ${field({ id: 'brand', label: 'Бренд', autocomplete: 'off', extra: `maxlength="40" required list="brands" value="${escape(drink?.brand ?? '')}"` })}
+      <datalist id="brands">${brands.map((b) => `<option value="${escape(b)}"></option>`).join('')}</datalist>
       <label class="check">
         <input type="checkbox" name="sugarFree" ${drink?.sugarFree ? 'checked' : ''} />
         <span>Без сахара</span>
       </label>
+      <div class="field" role="group" aria-labelledby="photo-label">
+        <span class="field__label" id="photo-label">Фото (необязательно)</span>
+        ${uploaderHtml({ id: 'photo' })}
+      </div>
       <fieldset class="swatches">
-        <legend class="field__label">Цвет банки (если нет фото)</legend>
+        <legend class="field__label">Цвет банки: <span id="color-name">${CAN_COLOR_NAMES[color] ?? ''}</span></legend>
         <div class="swatches__row">
           ${CAN_COLORS.map(
-            (c) => `<label class="swatch" style="--c:${c}">
-              <input type="radio" name="color" value="${c}" ${c === color ? 'checked' : ''} aria-label="Цвет ${c}" />
-              <span></span>
+            (c) => `<label class="swatch${isLightColor(c) ? ' swatch--light' : ''}" style="--c:${c}" title="${CAN_COLOR_NAMES[c]}">
+              <input type="radio" name="color" value="${c}" ${c === color ? 'checked' : ''} aria-label="${CAN_COLOR_NAMES[c]}" />
+              <span class="swatch__face">${CHECK_ICON}</span>
             </label>`,
           ).join('')}
         </div>
+        <small class="field__hint muted" id="color-hint" hidden>Цвет используется только если у энергетика нет фото.</small>
       </fieldset>
-      <div class="field">
-        <label class="field__label" for="photo">Фото (необязательно)</label>
-        <div class="photo-preview" id="photo-preview" ${drink?.image ? '' : 'hidden'}>
-          ${drink?.image ? `<img src="${escape(drink.image)}" alt="" />` : ''}
-        </div>
-        <input id="photo" name="photo" class="input input--file" type="file" accept="image/*" />
-        <small class="field__hint muted">Фото уменьшится прямо на устройстве; геометки и прочие данные съёмки не отправляются.</small>
-        ${
-          drink?.image
-            ? `<label class="check"><input type="checkbox" name="removePhoto" /><span>Удалить текущее фото</span></label>`
-            : ''
-        }
-      </div>
       <p id="form-error" class="form__error" role="alert" hidden></p>
       <button class="btn btn--primary" type="submit">${editing ? 'Сохранить' : 'Добавить энергетик'}</button>
     </form></div>`;
 
   const form = document.getElementById('drink-form');
   const error = document.getElementById('form-error');
-  const preview = document.getElementById('photo-preview');
-  const photo = document.getElementById('photo');
-  let previewUrl = null;
+  const submitBtn = form.querySelector('button[type="submit"]');
+  const colorHint = document.getElementById('color-hint');
+  const syncColorHint = () => (colorHint.hidden = !photoUp.hasPhoto);
+  // Фото уменьшается сразу при выборе; готовый blob уходит на сервер как есть.
+  const photoUp = mountUploader('photo', {
+    existing: drink?.image || null,
+    prepare: prepareDrinkPhoto,
+    title: 'Выбрать фото',
+    hint: 'JPEG, PNG или WebP. Фото уменьшится на устройстве; геометки не отправляются.',
+    onChange: syncColorHint,
+  });
+  syncColorHint();
 
-  photo.addEventListener('change', () => {
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    previewUrl = null;
-    const file = photo.files[0];
-    if (!file) return;
-    previewUrl = URL.createObjectURL(file);
-    preview.hidden = false;
-    preview.innerHTML = '<img alt="" />';
-    preview.firstChild.src = previewUrl;
+  clearErrorsOnInput(form);
+  form.addEventListener('change', (e) => {
+    if (e.target.name === 'color') document.getElementById('color-name').textContent = CAN_COLOR_NAMES[e.target.value] ?? '';
   });
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     error.hidden = true;
+    form.querySelectorAll('.input').forEach(clearFieldError);
     const data = new FormData(form);
     const body = {
       name: String(data.get('name')).trim(),
@@ -627,18 +918,19 @@ function renderDrinkForm(drink) {
       sugarFree: data.has('sugarFree'),
       color: String(data.get('color')),
     };
-    const bad = (message, f) => {
-      showError(error, { message });
-      form.elements[f]?.focus();
-    };
-    if (!body.name || body.name.length > 60) return bad('Название обязательно, не длиннее 60 символов.', 'name');
-    if (!body.brand || body.brand.length > 40) return bad('Бренд обязателен, не длиннее 40 символов.', 'brand');
+    const problems = [];
+    if (!body.name || body.name.length > 60) problems.push(['name', 'Название обязательно, не длиннее 60 символов.']);
+    if (!body.brand || body.brand.length > 40) problems.push(['brand', 'Бренд обязателен, не длиннее 40 символов.']);
+    if (problems.length) {
+      problems.forEach(([f, message]) => setFieldError(document.getElementById(f), { message }));
+      return document.getElementById(problems[0][0]).focus();
+    }
+    if (photoUp.working) return photoUp.setError('Фото ещё обрабатывается, подождите секунду.');
 
+    setSaving(submitBtn, true);
     await busy(form, async () => {
       try {
-        // Фото готовим до сохранения: если картинка не читается, энергетик не создаётся наполовину.
-        const file = photo.files[0];
-        const blob = file ? await prepareDrinkPhoto(file) : null;
+        const blob = photoUp.blob;
 
         const id = editing ? drink.id : (await createDrink(body)).id;
         if (editing) await updateDrink(id, body);
@@ -646,19 +938,21 @@ function renderDrinkForm(drink) {
         let warning = '';
         try {
           if (blob) await uploadDrinkImage(id, blob);
-          else if (editing && data.has('removePhoto')) await deleteDrinkImage(id);
+          else if (editing && photoUp.removed) await deleteDrinkImage(id);
         } catch (err) {
           warning = ` Фото не загрузилось: ${err.message}`;
         }
         notice = (editing ? 'Изменения сохранены.' : 'Энергетик добавлен. Теперь можно поставить оценку.') + warning;
         ({ drinks, users, ratings } = await loadData());
-        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        photoUp.destroy();
         scrollToRating = !editing;
         if (location.hash === `#/d/${id}`) route();
         else location.hash = `#/d/${id}`;
       } catch (err) {
-        showError(error, err);
-        if (err.field) form.elements[err.field]?.focus();
+        setSaving(submitBtn, false);
+        const input = err?.field ? document.getElementById(err.field) : null;
+        if (input && form.contains(input) && setFieldError(input, err)) input.focus();
+        else showError(error, err);
       }
     });
   });
@@ -682,9 +976,8 @@ function renderMe() {
     </section>
     <form id="avatar-form" class="form" novalidate>
       <div class="field">
-        <label class="field__label" for="avatar-file">Аватарка</label>
-        <input id="avatar-file" class="input input--file" type="file" accept="image/*" />
-        <small class="field__hint muted">Фото обрежется до квадрата и уменьшится на устройстве.</small>
+        <span class="field__label">Аватарка</span>
+        ${uploaderHtml({ id: 'avatar-file', compact: true })}
       </div>
       <p id="avatar-error" class="form__error" role="alert" hidden></p>
       <div class="actions">
@@ -701,17 +994,29 @@ function renderMe() {
 
   const avatarForm = document.getElementById('avatar-form');
   const avatarError = document.getElementById('avatar-error');
+  const avatarSubmit = avatarForm.querySelector('button[type="submit"]');
+  avatarSubmit.disabled = true;
+  const avatarUp = mountUploader('avatar-file', {
+    compact: true,
+    prepare: prepareAvatar,
+    onChange: () => (avatarSubmit.disabled = !avatarUp.blob),
+    title: 'Выбрать фото',
+    hint: 'JPEG, PNG или WebP. Фото обрежется до квадрата и уменьшится на устройстве.',
+  });
   avatarForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     avatarError.hidden = true;
-    const file = document.getElementById('avatar-file').files[0];
-    if (!file) return showError(avatarError, { message: 'Сначала выберите фото.' });
+    if (avatarUp.working) return avatarUp.setError('Фото ещё обрабатывается, подождите секунду.');
+    if (!avatarUp.blob) return avatarUp.setError('Сначала выберите фото.');
+    setSaving(avatarSubmit, true);
     await busy(avatarForm, async () => {
       try {
-        await uploadAvatar(await prepareAvatar(file));
+        await uploadAvatar(avatarUp.blob);
+        avatarUp.destroy();
         notice = 'Аватарка обновлена.';
         await reload();
       } catch (err) {
+        setSaving(avatarSubmit, false);
         showError(avatarError, err);
       }
     });
@@ -731,22 +1036,34 @@ function renderMe() {
 
   const cityForm = document.getElementById('city-form');
   const cityError = document.getElementById('city-error');
+  const citySubmit = cityForm.querySelector('button[type="submit"]');
+  clearErrorsOnInput(cityForm);
   cityForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     cityError.hidden = true;
+    cityForm.querySelectorAll('.input').forEach(clearFieldError);
     const fd = new FormData(cityForm);
     const name = String(fd.get('name')).trim().replace(/ {2,}/g, ' ');
     const city = String(fd.get('city')).trim();
+    const problems = [];
     if ([...name].length > 40 || (name && !/^[\p{L}\p{M}\p{N} .'-]+$/u.test(name)))
-      return showError(cityError, { message: 'Имя: до 40 символов — буквы, цифры, пробел, точка, дефис и апостроф.' });
-    if (city.length > 60) return showError(cityError, { message: 'Город: не длиннее 60 символов.' });
+      problems.push(['name', 'Имя: до 40 символов — буквы, цифры, пробел, точка, дефис и апостроф.']);
+    if (city.length > 60) problems.push(['city', 'Город: не длиннее 60 символов.']);
+    if (problems.length) {
+      problems.forEach(([f, message]) => setFieldError(document.getElementById(f), { message }));
+      return document.getElementById(problems[0][0]).focus();
+    }
+    setSaving(citySubmit, true);
     await busy(cityForm, async () => {
       try {
         await updateProfile(name, city);
         notice = 'Профиль сохранён.';
         await reload();
       } catch (err) {
-        showError(cityError, err);
+        setSaving(citySubmit, false);
+        const input = err?.field ? document.getElementById(err.field) : null;
+        if (input && cityForm.contains(input) && setFieldError(input, err)) input.focus();
+        else showError(cityError, err);
       }
     });
   });
@@ -772,25 +1089,66 @@ let returnTo = '#/';
 const field = ({ id, label, type = 'text', autocomplete, hint = '', extra = '' }) => `
   <div class="field">
     <label class="field__label" for="${id}">${label}</label>
-    <input id="${id}" name="${id}" class="input" type="${type}" autocomplete="${autocomplete}" ${extra} />
-    ${hint ? `<small class="field__hint muted">${hint}</small>` : ''}
+    <input id="${id}" name="${id}" class="input" type="${type}" autocomplete="${autocomplete || 'off'}" aria-describedby="${hint ? `${id}-hint ` : ''}${id}-error" ${extra} />
+    ${hint ? `<small class="field__hint muted" id="${id}-hint">${hint}</small>` : ''}
+    <p class="field__error" id="${id}-error" role="alert" hidden></p>
   </div>`;
+
+// Ошибка под полем: текст (и ссылка «Открыть его» для дубликата) в .field__error, input получает aria-invalid.
+function setFieldError(input, err) {
+  const el = document.getElementById(`${input.id}-error`);
+  if (!el) return false;
+  showError(el, err);
+  input.setAttribute('aria-invalid', 'true');
+  return true;
+}
+
+function clearFieldError(input) {
+  input.removeAttribute('aria-invalid');
+  const el = document.getElementById(`${input.id}-error`);
+  if (el) el.hidden = true;
+}
+
+// Ошибка поля снимается, как только пользователь начинает печатать в нём.
+function clearErrorsOnInput(form) {
+  form.addEventListener('input', (e) => {
+    if (e.target.matches?.('.input')) clearFieldError(e.target);
+  });
+}
+
+// Кнопка отправки на время запроса: aria-busy (спиннер из базы) и текст «Сохраняем…».
+function setSaving(btn, on, text = 'Сохраняем…') {
+  if (on) {
+    btn.dataset.label = btn.textContent;
+    btn.textContent = text;
+    btn.setAttribute('aria-busy', 'true');
+  } else {
+    if (btn.dataset.label) btn.textContent = btn.dataset.label;
+    btn.removeAttribute('aria-busy');
+  }
+}
 
 // Общая логика формы: блокируем кнопку на время отправки, показываем ошибку.
 function bindForm(onSubmit) {
   const form = document.getElementById('auth-form');
   const error = document.getElementById('auth-error');
   const submit = form.querySelector('button[type="submit"]');
+  clearErrorsOnInput(form);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     error.hidden = true;
+    form.querySelectorAll('.input').forEach(clearFieldError);
     submit.disabled = true;
     try {
       await onSubmit(Object.fromEntries(new FormData(form)));
     } catch (err) {
-      error.textContent = err.message || 'Что-то пошло не так. Попробуйте ещё раз.';
-      error.hidden = false;
-      if (err.field) form.elements[err.field]?.focus();
+      const input = err.field ? document.getElementById(err.field) : null;
+      if (input && setFieldError(input, err)) {
+        input.focus();
+      } else {
+        error.textContent = err.message || 'Что-то пошло не так. Попробуйте ещё раз.';
+        error.hidden = false;
+      }
       submit.disabled = false;
     }
   });
@@ -808,7 +1166,8 @@ function renderLogin() {
     <p class="muted form__alt">Ещё нет аккаунта? <a class="link" href="#/register">Зарегистрироваться</a></p></div>`;
 
   bindForm(async ({ nick, password }) => {
-    if (!nick.trim() || !password) throw { message: 'Введите ник и пароль.' };
+    if (!nick.trim() || !password)
+      throw { message: nick.trim() ? 'Введите пароль.' : 'Введите ник.', field: nick.trim() ? 'password' : 'nick' };
     await login(nick.trim(), password);
     location.hash = returnTo;
   });

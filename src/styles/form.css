@@ -1,0 +1,91 @@
+/* Владелец: формы энергетика и профиля (добавление/правка, выбор цвета, загрузка фото). */
+
+/* Ровный ритм полей в формах страниц (специфичнее базового .form). */
+.narrow .form { gap: var(--space-5); }
+.narrow .form .btn--primary { width: 100%; }
+.narrow .form .actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+/* Чекбокс: вся строка нажимаема, высота ≥44px. */
+.check { display: flex; align-items: center; gap: 10px; min-height: var(--control-h); cursor: pointer; }
+.check input { width: 22px; height: 22px; accent-color: var(--accent); flex: none; }
+
+/* ---------- Цвет банки ---------- */
+.swatches__row {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(44px, 56px));
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-2);
+}
+.swatch { position: relative; display: block; aspect-ratio: 1; min-width: 44px; cursor: pointer; }
+.swatch input { position: absolute; inset: 0; opacity: 0; margin: 0; width: 100%; height: 100%; cursor: pointer; }
+.swatch__face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--c);
+  border: 2px solid var(--border-strong);
+  color: #fff;
+  transition: box-shadow 0.12s;
+}
+.swatch--light .swatch__face { color: #111827; }
+.swatch__check { display: none; filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.55)); }
+.swatch--light .swatch__check { filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.7)); }
+.swatch:hover .swatch__face { border-color: var(--text); }
+.swatch input:checked + .swatch__face { border-color: var(--text); box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
+.swatch input:checked + .swatch__face .swatch__check { display: block; }
+.swatch input:focus-visible + .swatch__face { outline: 2px solid var(--text); outline-offset: 5px; }
+.swatches .field__hint { display: block; margin-top: var(--space-2); }
+.swatches .field__hint[hidden] { display: none; }
+
+/* ---------- Загрузка фото ---------- */
+.uploader { display: grid; gap: var(--space-2); }
+.uploader__stage { display: grid; gap: var(--space-3); }
+.uploader__drop {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-1);
+  min-height: 140px;
+  padding: var(--space-4);
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: center;
+  align-content: center;
+  cursor: pointer;
+}
+.uploader__drop:hover { background: var(--surface); border-color: var(--muted); }
+.uploader__drop--busy { cursor: progress; color: var(--muted); border-style: solid; }
+.uploader__icon { color: var(--muted); }
+.uploader__hint { font-size: var(--fs-xs); color: var(--muted); max-width: 32ch; }
+.uploader__preview {
+  display: block;
+  height: 200px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.uploader__preview img { width: 100%; height: 100%; max-width: none; object-fit: contain; display: block; }
+.uploader__actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.uploader__note { margin: 0; font-size: var(--fs-sm); color: var(--muted); }
+.uploader__undo {
+  min-height: var(--control-h);
+  padding: 0 var(--space-1);
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* Компактный вариант (аватарка): превью слева, кнопки справа. */
+.uploader--compact .uploader__stage { grid-template-columns: auto 1fr; align-items: center; gap: var(--space-3); }
+.uploader--compact .uploader__drop { grid-column: 1 / -1; min-height: 0; padding: var(--space-3); }
+.uploader--compact .uploader__preview { width: 80px; height: 80px; border-radius: 50%; }
+.uploader--compact .uploader__preview img { object-fit: cover; }
+.uploader--compact .uploader__note { grid-column: 1 / -1; }

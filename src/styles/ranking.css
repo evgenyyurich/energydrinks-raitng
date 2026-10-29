@@ -1,0 +1,145 @@
+/* Владелец: страница рейтинга (список энергетиков, поиск/сортировка, нижняя панель действия). */
+
+/* Заголовок: текст слева, кнопка добавления справа (≥640px) */
+.hero--ranking { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-4); }
+.hero--ranking .hero__text { min-width: 0; }
+a.btn.hero__add { display: none; flex: none; }
+
+/* Поиск и сортировка */
+.controls {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-4) 0 var(--space-3);
+}
+.controls[hidden] { display: none; }
+.search, .sortbox { position: relative; min-width: 0; }
+.search .input { padding-left: 40px; }
+.search__icon {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+.search .input:focus ~ .search__icon,
+.search:focus-within .search__icon { color: var(--accent); }
+.rank-count { margin: 0 0 var(--space-2); font-size: var(--fs-sm); }
+.rank-count:empty { display: none; }
+
+/* Общие элементы карточек (используются и на других страницах) */
+.card__rank {
+  width: 22px;
+  text-align: center;
+  font-weight: 800;
+  color: var(--muted);
+}
+.card__can {
+  width: 28px;
+  height: 48px;
+  border-radius: 6px 6px 8px 8px;
+  background: linear-gradient(90deg, rgba(255,255,255,.25), transparent 40%, rgba(0,0,0,.3)), var(--can);
+  border-top: 4px solid #c9ced8;
+}
+.card__thumb {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.card__thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.card--link .card__name { color: var(--text); }
+
+/* Карточка энергетика в рейтинге */
+.card.card--drink {
+  grid-template-columns: 22px auto minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-2);
+}
+.card--drink:hover { background: var(--surface-2); }
+.card--drink:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.card--drink .card__rank {
+  width: 22px;
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.card__media {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 72px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.card--drink:hover .card__media { background: var(--bg); }
+.card__media .card__thumb { width: 100%; height: 100%; border-radius: 0; background: none; }
+.card__media .card__can { width: 30px; height: 52px; }
+.card--drink .card__body { min-width: 0; }
+.card--drink .card__name {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: var(--fs-base);
+  font-weight: 700;
+  line-height: 1.25;
+}
+.card__brand {
+  margin: 2px 0 0;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card--drink .card__meta { margin-top: 4px; font-size: var(--fs-xs); }
+
+/* Балл: крупное число, «/10» и число оценок под ним */
+.score.rank-score {
+  min-width: 56px;
+  padding: var(--space-1) var(--space-2);
+  background: none;
+  text-align: center;
+}
+.rank-score__value { display: inline-flex; align-items: baseline; gap: 2px; white-space: nowrap; }
+.rank-score strong { font-size: var(--fs-xl); font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.rank-score__max { font-size: var(--fs-xs); color: var(--muted); }
+.rank-score small { margin-top: var(--space-1); font-size: var(--fs-xs); }
+
+/* Нижняя панель действия (только телефон) */
+.action-spacer { height: calc(var(--control-h) + var(--space-5) + env(safe-area-inset-bottom)); }
+.action-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9;
+  padding: var(--space-3) 0 calc(var(--space-3) + env(safe-area-inset-bottom));
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+}
+.action-bar__inner { max-width: var(--container); margin: 0 auto; padding: 0 var(--space-4); }
+.btn.action-bar__btn { display: grid; width: 100%; }
+
+@media (min-width: 640px) {
+  .controls { grid-template-columns: minmax(0, 1fr) 220px; }
+  a.btn.hero__add { display: inline-grid; }
+  .action-bar, .action-spacer { display: none; }
+  .card.card--drink { grid-template-columns: 28px auto minmax(0, 1fr) auto; gap: var(--space-4); padding: var(--space-3) var(--space-4) var(--space-3) var(--space-3); }
+  .card--drink .card__rank { width: 28px; font-size: var(--fs-base); }
+  .card__media { width: 64px; height: 88px; }
+  .card__media .card__can { width: 34px; height: 60px; }
+  .card--drink .card__name { font-size: var(--fs-lg); }
+  .card--drink .card__meta { font-size: var(--fs-sm); }
+  .score.rank-score { min-width: 76px; }
+  .rank-score strong { font-size: 28px; }
+  .rank-score__max { font-size: var(--fs-sm); }
+}
