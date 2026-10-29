@@ -15,13 +15,13 @@
       "port": 5173
     },
     {
-      "name": "pocketbase",
+      "name": "server",
       "runtimeExecutable": "npm",
       "runtimeArgs": [
         "run",
-        "pb"
+        "server"
       ],
-      "port": 8090
+      "port": 3000
     }
   ]
 }

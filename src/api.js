@@ -1,90 +1,94 @@
-import PocketBase from 'pocketbase';
+// Клиент нашего сервера (/api). Сессия живёт в HttpOnly-cookie, JS её не видит.
 
-const pb = new PocketBase(import.meta.env.VITE_PB_URL || 'http://127.0.0.1:8090');
-// Параллельные загрузки не должны отменять друг друга.
-pb.autoCancellation(false);
+let me = null;
+const listeners = new Set();
+const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('auth') : null;
 
-// ---------- Авторизация ----------
-
-// Плоский объект текущего участника или null. Сессия хранится SDK в localStorage.
-export function currentUser() {
-  const m = pb.authStore.isValid ? pb.authStore.record : null;
-  return m ? { id: m.id, nick: m.nick, avatar: avatarUrl(m) } : null;
+function setMe(user, broadcast = false) {
+  const changed = JSON.stringify(me) !== JSON.stringify(user);
+  me = user;
+  if (changed) listeners.forEach((fn) => fn(me));
+  if (broadcast) channel?.postMessage('changed');
 }
+
+// Текущий участник (из кэша, обновляется при входе/выходе и loadData) или null.
+export const currentUser = () => me;
 
 // Подписка на вход/выход (в том числе из другой вкладки).
-export const onAuthChange = (fn) => pb.authStore.onChange(fn);
-
-// Превращает ошибку SDK в понятное сообщение; поля — подсказки для подсветки.
-function authError(err, kind) {
-  if (err?.status === 0) return { message: 'Сервер недоступен. Попробуйте чуть позже.' };
-  if (err?.status === 429) return { message: 'Слишком много попыток. Подождите минуту и повторите.' };
-  const f = err?.response?.data || {};
-  if (kind === 'login') {
-    if (err?.status === 400) return { message: 'Неверный ник или пароль.' };
-  } else {
-    if (f.nick?.code === 'validation_not_unique') return { message: 'Этот ник уже занят.', field: 'nick' };
-    if (f.nick) return { message: 'Ник: 3–24 символа, только латинские буквы, цифры и _.', field: 'nick' };
-    if (f.password) return { message: 'Пароль слишком короткий: нужно минимум 8 символов.', field: 'password' };
-  }
-  return { message: 'Что-то пошло не так. Попробуйте ещё раз.' };
+export function onAuthChange(fn) {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
 }
 
-async function wrap(fn, kind) {
+async function request(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    credentials: 'same-origin',
+    // Любой не-GET всегда уходит как JSON (сервер требует application/json для защиты от CSRF).
+    headers: method === 'GET' ? {} : { 'Content-Type': 'application/json' },
+    body: method === 'GET' ? undefined : JSON.stringify(body ?? {}),
+  });
+  let data = null;
   try {
-    await fn();
+    data = await res.json();
+  } catch {}
+  if (!res.ok) throw Object.assign(new Error(data?.error || `http_${res.status}`), { status: res.status, code: data?.error });
+  return data;
+}
+
+const refreshMe = async () => setMe((await request('GET', '/api/me')).user);
+channel?.addEventListener('message', () => refreshMe().catch(console.error));
+
+// Превращает ошибку в понятное сообщение; field — подсказка для подсветки поля.
+function authError(err) {
+  if (err.status === undefined) return { message: 'Сервер недоступен. Попробуйте чуть позже.' };
+  switch (err.code) {
+    case 'rate_limited':
+      return { message: 'Слишком много попыток. Подождите минуту и повторите.' };
+    case 'wrong_credentials':
+      return { message: 'Неверный ник или пароль.' };
+    case 'nick_taken':
+      return { message: 'Этот ник уже занят.', field: 'nick' };
+    case 'nick_invalid':
+      return { message: 'Ник: 3–24 символа, только латинские буквы, цифры и _.', field: 'nick' };
+    case 'password_short':
+      return { message: 'Пароль слишком короткий: нужно минимум 8 символов.', field: 'password' };
+    case 'password_long':
+      return { message: 'Пароль слишком длинный: не больше 128 символов.', field: 'password' };
+    default:
+      return { message: 'Что-то пошло не так. Попробуйте ещё раз.' };
+  }
+}
+
+async function auth(path, nick, password) {
+  try {
+    setMe((await request('POST', path, { nick, password })).user, true);
   } catch (err) {
     console.error(err);
-    throw authError(err, kind);
+    throw authError(err);
   }
 }
 
-export const login = (nick, password) =>
-  wrap(() => pb.collection('users').authWithPassword(nick, password), 'login');
+export const login = (nick, password) => auth('/api/login', nick, password);
 
-// Регистрация открыта всем (только ник и пароль), затем сразу вход.
-export const register = (nick, password) =>
-  wrap(async () => {
-    await pb.collection('users').create({ nick, password, passwordConfirm: password });
-    await pb.collection('users').authWithPassword(nick, password);
-  }, 'register');
+// Регистрация открыта всем (только ник и пароль), сервер сразу выполняет вход.
+export const register = (nick, password) => auth('/api/register', nick, password);
 
-export const logout = () => pb.authStore.clear();
+export async function logout() {
+  let failed = null;
+  try {
+    await request('POST', '/api/logout');
+  } catch (err) {
+    console.error(err);
+    failed = err;
+  }
+  // Локально выходим в любом случае, но если сервер не подтвердил — сообщаем об этом.
+  setMe(null, true);
+  if (failed) throw { message: 'Не удалось выйти на сервере, попробуйте ещё раз.' };
+}
 
-const avatarUrl = (record) =>
-  record.avatar ? pb.files.getURL(record, record.avatar, { thumb: '100x100' }) : null;
-
-// Загружает всё одним заходом и приводит к плоским объектам, с которыми работает main.js.
+// Загружает всё одним заходом (данные уже в плоском виде) и заодно узнаёт текущего участника.
 export async function loadData() {
-  const [drinkRecords, userRecords, ratingRecords] = await Promise.all([
-    pb.collection('drinks').getFullList(),
-    pb.collection('users').getFullList(),
-    pb.collection('ratings').getFullList(),
-  ]);
-
-  const drinks = drinkRecords.map((d) => ({
-    id: d.id,
-    name: d.name,
-    brand: d.brand,
-    volume: d.volume,
-    caffeine: d.caffeine,
-    sugarFree: d.sugarFree,
-    color: d.color,
-  }));
-
-  const users = userRecords.map((u) => ({
-    id: u.id,
-    nick: u.nick,
-    avatar: avatarUrl(u),
-    city: u.city || null,
-  }));
-
-  const ratings = ratingRecords.map((r) => ({
-    userId: r.user,
-    drinkId: r.drink,
-    score: r.score,
-    store: r.store || null,
-  }));
-
-  return { drinks, users, ratings };
+  const [data] = await Promise.all([request('GET', '/api/data'), refreshMe()]);
+  return data;
 }

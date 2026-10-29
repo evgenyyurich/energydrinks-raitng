@@ -4,7 +4,7 @@ const app = document.getElementById('app');
 const account = document.getElementById('account');
 const tabs = document.querySelectorAll('.tabs__item');
 
-// Данные приходят из PocketBase один раз при старте.
+// Данные приходят с нашего сервера (/api) один раз при старте.
 let drinks = [];
 let users = [];
 let ratings = [];
@@ -355,7 +355,7 @@ async function start() {
   // Шапка обновляется при входе/выходе без перезагрузки страницы.
   onAuthChange(renderAccount);
   account.addEventListener('click', (e) => {
-    if (e.target.closest('#logout')) logout();
+    if (e.target.closest('#logout')) logout().catch((err) => alert(err.message));
   });
   renderAccount();
   route();
