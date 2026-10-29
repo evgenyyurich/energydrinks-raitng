@@ -350,7 +350,7 @@ function renderDrink(id) {
                    mine ? `<strong>${mine.score}</strong> / 10` : '<strong>—</strong> / 10'
                  }</p>
                  <input id="score" name="score" class="slider__input" type="range" min="1" max="10" step="1" value="${mine?.score ?? 5}" ${mine ? '' : 'aria-valuetext="не выбрана"'} />
-                 <div class="slider__ticks" aria-hidden="true">${Array.from({ length: 10 }, (_, i) => `<span>${i + 1}</span>`).join('')}</div>
+                 <div class="slider__ticks" aria-hidden="true">${Array.from({ length: 10 }, (_, i) => `<span data-v="${i + 1}"${mine && mine.score === i + 1 ? ' class="is-active"' : ''}>${i + 1}</span>`).join('')}</div>
                </div>
                <div class="field">
                  <label class="field__label" for="store">Где куплен (необязательно)</label>
@@ -405,15 +405,41 @@ function renderDrink(id) {
     let chosen = !!mine;
     saveBtn.disabled = !chosen;
     // Оценка «выбрана», только когда пользователь тронул ползунок: случайное значение по умолчанию не сохраняем.
+    const sliderBox = form.querySelector('.slider');
+    const ticks = sliderBox.querySelectorAll('.slider__ticks span');
+    let lastShown = mine ? mine.score : null;
+    // Заливка и цвет бегунка: --fill в процентах, --hue плавно идёт от красного (1) к зелёному (10).
+    const paint = (v) => {
+      const p = ((v - 1) / 9) * 100;
+      sliderBox.style.setProperty('--fill', `${p}%`);
+      sliderBox.style.setProperty('--fill-n', p);
+      sliderBox.style.setProperty('--tone', `var(--${v >= 8 ? 'high' : v >= 6 ? 'mid' : 'low'})`);
+      sliderBox.style.setProperty('--hue', Math.round(((v - 1) / 9) * 125));
+    };
+    paint(Number(slider.value));
     const choose = () => {
       const v = Number(slider.value);
       chosen = true;
       saveBtn.disabled = false;
-      form.querySelector('.slider').classList.remove('slider--unset');
+      sliderBox.classList.remove('slider--unset');
+      paint(v);
+      ticks.forEach((t) => t.classList.toggle('is-active', Number(t.dataset.v) === v));
       shown.className = `slider__value ${scoreClass(v)}`;
       shown.innerHTML = `<strong>${v}</strong> / 10`;
       slider.setAttribute('aria-valuetext', `${v} из 10`);
+      if (v !== lastShown) {
+        lastShown = v;
+        const num = shown.firstElementChild;
+        num.classList.add('bump');
+        num.addEventListener('animationend', () => num.classList.remove('bump'), { once: true });
+      }
     };
+    ticks.forEach((t) =>
+      t.addEventListener('click', () => {
+        slider.value = t.dataset.v;
+        choose();
+      }),
+    );
     slider.addEventListener('input', choose);
     slider.addEventListener('change', choose);
     slider.addEventListener('pointerdown', choose);
