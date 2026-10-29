@@ -312,7 +312,7 @@ function renderDrink(id) {
     .filter((r) => r.user)
     .sort((a, b) => b.score - a.score || a.user.nick.localeCompare(b.user.nick));
   const mine = me ? all.find((r) => r.userId === me.id) : null;
-  const owner = !!me && drink.createdBy === me.id;
+  const owner = !!me && (drink.createdBy === me.id || !!me.isAdmin);
 
   app.innerHTML = `
     <a class="link back" href="#/">← Все энергетики</a>
@@ -507,11 +507,11 @@ const CAN_COLORS = ['#1e3a8a', '#166534', '#b91c1c', '#7c2d12', '#ca8a04', '#4c1
 function renderDrinkForm(drink) {
   const me = currentUser();
   const editing = !!drink;
-  if (editing && drink.createdBy !== me.id) {
+  if (editing && drink.createdBy !== me.id && !me.isAdmin) {
     app.innerHTML = `
       <section class="hero">
         <h1>Нет доступа</h1>
-        <p class="muted">Править энергетик может только тот, кто его добавил.</p>
+        <p class="muted">Править энергетик может только тот, кто его добавил, или администратор.</p>
         <p><a class="link" href="#/d/${drink.id}">← К энергетику</a></p>
       </section>`;
     return;

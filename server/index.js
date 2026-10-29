@@ -25,11 +25,11 @@ const q = {
   drinks: db.prepare('SELECT id, name, brand, sugar_free, color, image, created_by FROM drinks ORDER BY id'),
   users: db.prepare('SELECT id, nick, name, avatar, city FROM users ORDER BY id'),
   ratings: db.prepare('SELECT user_id, drink_id, score, store, price FROM ratings ORDER BY id'),
-  userByNick: db.prepare('SELECT id, nick, name, avatar, city, password_hash FROM users WHERE nick = ?'),
+  userByNick: db.prepare('SELECT id, nick, name, avatar, city, is_admin, password_hash FROM users WHERE nick = ?'),
   insertUser: db.prepare('INSERT INTO users (nick, password_hash) VALUES (?, ?)'),
   insertSession: db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)'),
   sessionUser: db.prepare(
-    `SELECT u.id, u.nick, u.name, u.avatar, u.city FROM sessions s JOIN users u ON u.id = s.user_id
+    `SELECT u.id, u.nick, u.name, u.avatar, u.city, u.is_admin FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.token_hash = ? AND s.expires_at > ?`,
   ),
   drinkById: db.prepare('SELECT id, name, brand, image, created_by FROM drinks WHERE id = ?'),
@@ -46,7 +46,7 @@ const q = {
        score = excluded.score, store = excluded.store, price = excluded.price, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
   ),
   deleteRating: db.prepare('DELETE FROM ratings WHERE user_id = ? AND drink_id = ?'),
-  userById: db.prepare('SELECT id, nick, name, avatar, city FROM users WHERE id = ?'),
+  userById: db.prepare('SELECT id, nick, name, avatar, city, is_admin FROM users WHERE id = ?'),
   setProfile: db.prepare('UPDATE users SET name = ?, city = ? WHERE id = ?'),
   setAvatar: db.prepare('UPDATE users SET avatar = ? WHERE id = ?'),
   deleteSession: db.prepare('DELETE FROM sessions WHERE token_hash = ?'),
@@ -59,6 +59,7 @@ setInterval(() => q.purgeSessions.run(Date.now()), 3600 * 1000).unref();
 
 const avatarUrl = (file) => (file ? `/uploads/${encodeURIComponent(file)}` : null);
 const publicUser = (u) => ({ id: u.id, nick: u.nick, name: u.name ?? null, avatar: avatarUrl(u.avatar), city: u.city ?? null });
+const selfUser = (u) => ({ ...publicUser(u), isAdmin: !!u.is_admin });
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 
 class HttpError extends Error {
@@ -239,10 +240,10 @@ function drinkOf(idStr) {
   return drink;
 }
 
-// Править и удалять энергетик может только тот, кто его добавил.
+// Править и удалять энергетик может его автор или администратор.
 function ownDrink(user, idStr) {
   const drink = drinkOf(idStr);
-  if (drink.created_by === null || drink.created_by !== user.id) throw new HttpError(403, 'forbidden');
+  if (!user.is_admin && (drink.created_by === null || drink.created_by !== user.id)) throw new HttpError(403, 'forbidden');
   return drink;
 }
 
@@ -310,7 +311,7 @@ const routes = {
 
   'GET /api/me': (req, res) => {
     const u = sessionUser(req);
-    send(res, 200, { user: u ? publicUser(u) : null });
+    send(res, 200, { user: u ? selfUser(u) : null });
   },
 
   'POST /api/register': async (req, res) => {
@@ -329,7 +330,7 @@ const routes = {
       if (/UNIQUE/i.test(err.message)) throw new HttpError(409, 'nick_taken'); // гонка двух регистраций
       throw err;
     }
-    send(res, 201, { user: publicUser({ id, nick, name: null, avatar: null, city: null }) }, startSession(res, id));
+    send(res, 201, { user: selfUser({ id, nick, name: null, avatar: null, city: null, is_admin: 0 }) }, startSession(res, id));
   },
 
   'POST /api/login': async (req, res) => {
@@ -341,12 +342,13 @@ const routes = {
     // Хэш считаем всегда — время ответа не выдаёт, существует ли ник.
     const ok = await verifyPassword(valid ? password : '', user ? user.password_hash : dummyHash);
     if (!user || !ok) throw new HttpError(401, 'wrong_credentials');
-    send(res, 200, { user: publicUser(user) }, startSession(res, user.id));
+    send(res, 200, { user: selfUser(user) }, startSession(res, user.id));
   },
 
   'POST /api/drinks': async (req, res) => {
     checkCsrf(req);
     const user = requireUser(req);
+    rateLimit('drink', clientIp(req), 20);
     const d = cleanDrink(await readJson(req));
     assertNotDuplicate(d);
     let id;
@@ -368,7 +370,7 @@ const routes = {
     const name = 'name' in body ? cleanName(body.name) : cur.name;
     const city = 'city' in body ? cleanStr(body.city, { max: 60, code: 'city_invalid' }) : cur.city;
     q.setProfile.run(name, city, user.id);
-    send(res, 200, { user: publicUser(q.userById.get(user.id)) });
+    send(res, 200, { user: selfUser(q.userById.get(user.id)) });
   },
 
   'PUT /api/me/avatar': async (req, res) => {
