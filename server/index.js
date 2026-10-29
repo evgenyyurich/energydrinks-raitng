@@ -23,13 +23,13 @@ const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const db = openDb();
 const q = {
   drinks: db.prepare('SELECT id, name, brand, sugar_free, color, image, created_by FROM drinks ORDER BY id'),
-  users: db.prepare('SELECT id, nick, avatar, city FROM users ORDER BY id'),
-  ratings: db.prepare('SELECT user_id, drink_id, score, store FROM ratings ORDER BY id'),
-  userByNick: db.prepare('SELECT id, nick, avatar, city, password_hash FROM users WHERE nick = ?'),
+  users: db.prepare('SELECT id, nick, name, avatar, city FROM users ORDER BY id'),
+  ratings: db.prepare('SELECT user_id, drink_id, score, store, price FROM ratings ORDER BY id'),
+  userByNick: db.prepare('SELECT id, nick, name, avatar, city, password_hash FROM users WHERE nick = ?'),
   insertUser: db.prepare('INSERT INTO users (nick, password_hash) VALUES (?, ?)'),
   insertSession: db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)'),
   sessionUser: db.prepare(
-    `SELECT u.id, u.nick, u.avatar, u.city FROM sessions s JOIN users u ON u.id = s.user_id
+    `SELECT u.id, u.nick, u.name, u.avatar, u.city FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.token_hash = ? AND s.expires_at > ?`,
   ),
   drinkById: db.prepare('SELECT id, name, brand, image, created_by FROM drinks WHERE id = ?'),
@@ -41,13 +41,13 @@ const q = {
   setDrinkImage: db.prepare('UPDATE drinks SET image = ? WHERE id = ?'),
   deleteDrink: db.prepare('DELETE FROM drinks WHERE id = ?'),
   upsertRating: db.prepare(
-    `INSERT INTO ratings (user_id, drink_id, score, store) VALUES (?, ?, ?, ?)
+    `INSERT INTO ratings (user_id, drink_id, score, store, price) VALUES (?, ?, ?, ?, ?)
      ON CONFLICT (user_id, drink_id) DO UPDATE SET
-       score = excluded.score, store = excluded.store, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+       score = excluded.score, store = excluded.store, price = excluded.price, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
   ),
   deleteRating: db.prepare('DELETE FROM ratings WHERE user_id = ? AND drink_id = ?'),
-  userById: db.prepare('SELECT id, nick, avatar, city FROM users WHERE id = ?'),
-  setCity: db.prepare('UPDATE users SET city = ? WHERE id = ?'),
+  userById: db.prepare('SELECT id, nick, name, avatar, city FROM users WHERE id = ?'),
+  setProfile: db.prepare('UPDATE users SET name = ?, city = ? WHERE id = ?'),
   setAvatar: db.prepare('UPDATE users SET avatar = ? WHERE id = ?'),
   deleteSession: db.prepare('DELETE FROM sessions WHERE token_hash = ?'),
   purgeSessions: db.prepare('DELETE FROM sessions WHERE expires_at <= ?'),
@@ -58,7 +58,7 @@ setInterval(() => q.purgeSessions.run(Date.now()), 3600 * 1000).unref();
 // ---------- Помощники ----------
 
 const avatarUrl = (file) => (file ? `/uploads/${encodeURIComponent(file)}` : null);
-const publicUser = (u) => ({ id: u.id, nick: u.nick, avatar: avatarUrl(u.avatar), city: u.city ?? null });
+const publicUser = (u) => ({ id: u.id, nick: u.nick, name: u.name ?? null, avatar: avatarUrl(u.avatar), city: u.city ?? null });
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 
 class HttpError extends Error {
@@ -189,6 +189,17 @@ function cleanStr(v, { max, required = false, code }) {
   return s || null;
 }
 
+// Имя: буквы любого алфавита, цифры, пробел, . - ' ; 1–40 символов, повторные пробелы схлопываются.
+const NAME_RE = /^[\p{L}\p{M}\p{N} .'-]+$/u;
+function cleanName(v) {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'string') throw new HttpError(400, 'name_invalid');
+  const s = v.trim().replace(/ {2,}/g, ' ');
+  if (!s) return null;
+  if ([...s].length > 40 || !NAME_RE.test(s)) throw new HttpError(400, 'name_invalid');
+  return s;
+}
+
 function cleanInt(v, min, max, code) {
   if (typeof v !== 'number' || !Number.isInteger(v) || v < min || v > max) throw new HttpError(400, code);
   return v;
@@ -293,7 +304,7 @@ const routes = {
         sugarFree: !!d.sugar_free, color: d.color, image: avatarUrl(d.image), createdBy: d.created_by,
       })),
       users: q.users.all().map(publicUser),
-      ratings: q.ratings.all().map((r) => ({ userId: r.user_id, drinkId: r.drink_id, score: r.score, store: r.store ?? null })),
+      ratings: q.ratings.all().map((r) => ({ userId: r.user_id, drinkId: r.drink_id, score: r.score, store: r.store ?? null, price: r.price ?? null })),
     });
   },
 
@@ -318,7 +329,7 @@ const routes = {
       if (/UNIQUE/i.test(err.message)) throw new HttpError(409, 'nick_taken'); // гонка двух регистраций
       throw err;
     }
-    send(res, 201, { user: publicUser({ id, nick, avatar: null, city: null }) }, startSession(res, id));
+    send(res, 201, { user: publicUser({ id, nick, name: null, avatar: null, city: null }) }, startSession(res, id));
   },
 
   'POST /api/login': async (req, res) => {
@@ -352,8 +363,11 @@ const routes = {
     checkCsrf(req);
     const user = requireUser(req);
     const body = await readJson(req);
-    const city = cleanStr(body.city, { max: 60, code: 'city_invalid' });
-    q.setCity.run(city, user.id);
+    const cur = q.userById.get(user.id);
+    // Поле, которого нет в запросе, не меняется.
+    const name = 'name' in body ? cleanName(body.name) : cur.name;
+    const city = 'city' in body ? cleanStr(body.city, { max: 60, code: 'city_invalid' }) : cur.city;
+    q.setProfile.run(name, city, user.id);
     send(res, 200, { user: publicUser(q.userById.get(user.id)) });
   },
 
@@ -389,7 +403,9 @@ const paramRoutes = [
     const body = await readJson(req);
     const score = cleanInt(body.score, 1, 10, 'score_invalid');
     const store = cleanStr(body.store, { max: 100, code: 'store_invalid' });
-    q.upsertRating.run(user.id, drink.id, score, store);
+    // Цена в целых рублях; null или отсутствие поля = «цена не указана» (при обновлении старая цена сбрасывается).
+    const price = body.price === undefined || body.price === null ? null : cleanInt(body.price, 1, 5000, 'price_invalid');
+    q.upsertRating.run(user.id, drink.id, score, store, price);
     send(res, 200, { ok: true });
   }],
   ['DELETE', /^\/api\/ratings\/([^/]+)$/, async (req, res, idStr) => {

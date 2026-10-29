@@ -107,7 +107,20 @@ a.btn { display: inline-grid; place-items: center; text-decoration: none; }
   text-decoration: none;
 }
 .account__me .avatar { width: 32px; height: 32px; flex: none; font-size: 14px; }
-.account__nick { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account__nick { max-width: 14ch; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Центрированный узкий блок (вход, регистрация, формы) */
+.narrow { max-width: 420px; margin-inline: auto; }
+.narrow--card {
+  margin-top: 24px;
+  padding: 8px 24px 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+}
+@media (max-width: 480px) {
+  .narrow--card { margin-top: 0; padding: 0; background: none; border: 0; border-radius: 0; }
+}
 
 /* Формы входа и регистрации */
 .form { display: grid; gap: 14px; margin-top: 16px; max-width: 420px; }
@@ -270,6 +283,9 @@ a.btn { display: inline-grid; place-items: center; text-decoration: none; }
 }
 .profile__nick { margin: 0; font-size: 26px; line-height: 1.15; word-break: break-word; }
 .profile > div { min-width: 0; }
+.nick { font-size: 13px; font-weight: 400; color: var(--muted); }
+.card__name .nick { display: block; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
+.profile__handle { margin: 2px 0 0; overflow-wrap: anywhere; }
 .profile__city { margin: 2px 0 0; overflow-wrap: anywhere; }
 .profile__stats { margin: 2px 0 0; }
 

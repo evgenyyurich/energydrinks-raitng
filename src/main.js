@@ -19,6 +19,10 @@ let ratings = [];
 const average = (scores) =>
   scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
 
+const formatPrice = (n) => `${n} ₽`;
+// «Магнит · 119 ₽» — магазин и/или цена, что указано.
+const purchaseLabel = (r) => [r.store && escape(r.store), r.price != null && formatPrice(r.price)].filter(Boolean).join(' · ');
+
 const plural = (n, one, few, many) => {
   const mod10 = n % 10;
   const mod100 = n % 100;
@@ -51,18 +55,27 @@ const thumb = (drink) =>
     ? `<span class="card__thumb" aria-hidden="true"><img src="${escape(drink.image)}" alt="" loading="lazy" /></span>`
     : can(drink);
 const can = (drink) => `<span class="card__can" style="--can:${drink.color}" aria-hidden="true"></span>`;
-// Картинка, если задан avatar, иначе кружок с первой буквой ника.
+// Картинка, если задан avatar, иначе кружок с первой буквой имени (если есть) или ника.
 const avatar = (user) =>
   `<span class="avatar" aria-hidden="true">${
-    user.avatar ? `<img src="${escape(user.avatar)}" alt="" />` : escape(user.nick[0].toUpperCase())
+    user.avatar ? `<img src="${escape(user.avatar)}" alt="" />` : escape([...(user.name || user.nick)][0].toUpperCase())
   }</span>`;
+// Имя участника: имя (если задано) и мелкий @ник рядом; без имени — просто ник.
+const displayName = (user) => escape(user.name || user.nick);
+const nickTag = (user) => (user.name ? ` <span class="nick">@${escape(user.nick)}</span>` : '');
 
 // ---------- Подсчёты ----------
 
 const drinkStats = () =>
   drinks.map((d) => {
-    const scores = ratings.filter((r) => r.drinkId === d.id).map((r) => r.score);
-    return { ...d, avg: average(scores), votes: scores.length };
+    const own = ratings.filter((r) => r.drinkId === d.id);
+    const scores = own.map((r) => r.score);
+    const prices = own.map((r) => r.price).filter((p) => p != null);
+    const avgPrice = average(prices);
+    return {
+      ...d, avg: average(scores), votes: scores.length,
+      avgPrice: avgPrice === null ? null : Math.round(avgPrice), priceCount: prices.length,
+    };
   });
 
 const userStats = () =>
@@ -77,6 +90,7 @@ const drinkSorts = {
   rating: (a, b) => (b.avg ?? -1) - (a.avg ?? -1),
   votes: (a, b) => b.votes - a.votes,
   name: (a, b) => a.name.localeCompare(b.name, 'ru'),
+  price: (a, b) => (a.avgPrice ?? Infinity) - (b.avgPrice ?? Infinity) || a.name.localeCompare(b.name, 'ru'),
 };
 
 const drinkFilter = { q: '', sort: 'rating' };
@@ -93,6 +107,7 @@ function renderDrinks() {
         <option value="rating">По рейтингу</option>
         <option value="votes">По числу оценок</option>
         <option value="name">По названию</option>
+        <option value="price">По цене</option>
       </select>
     </section>
     <ol id="list" class="list"></ol>
@@ -131,6 +146,7 @@ function renderDrinks() {
             <h2 class="card__name">${escape(d.name)}</h2>
             <p class="card__meta">
               <span>${escape(d.brand)}</span>
+              ${d.avgPrice !== null ? `<span>≈ ${formatPrice(d.avgPrice)}</span>` : ''}
               ${d.sugarFree ? '<span class="tag">без сахара</span>' : ''}
             </p>
           </div>
@@ -165,7 +181,7 @@ function renderPeople() {
               <span class="card__rank">${i + 1}</span>
               ${avatar(u)}
               <div class="card__body">
-                <h2 class="card__name">${escape(u.nick)}</h2>
+                <h2 class="card__name">${displayName(u)}${nickTag(u)}</h2>
                 <p class="card__meta"><span>${[u.city && escape(u.city), `средняя оценка ${formatScore(u.avg === null ? null : Math.round(u.avg * 10) / 10)}`].filter(Boolean).join(' · ')}</span></p>
               </div>
               <div class="score">
@@ -204,7 +220,8 @@ function renderProfile(nick) {
     <section class="profile">
       ${avatar(user).replace('avatar', 'avatar avatar--lg')}
       <div>
-        <h1 class="profile__nick">${escape(user.nick)}</h1>
+        <h1 class="profile__nick">${displayName(user)}</h1>
+        ${user.name ? `<p class="muted profile__handle">@${escape(user.nick)}</p>` : ''}
         ${user.city ? `<p class="muted profile__city">${escape(user.city)}</p>` : ''}
         <p class="muted profile__stats">
           ${votesLabel(own.length)} · средняя ${avg === null ? '—' : avg.toFixed(1)}
@@ -224,7 +241,7 @@ function renderProfile(nick) {
                   ${thumb(r.drink)}
                   <div class="card__body">
                     <h2 class="card__name">${escape(r.drink.name)}</h2>
-                    <p class="card__meta"><span>${[`у всех в среднем ${all.toFixed(1)}`, r.store && `куплен: ${escape(r.store)}`].filter(Boolean).join(' · ')}</span></p>
+                    <p class="card__meta"><span>${[`у всех в среднем ${all.toFixed(1)}`, (r.store || r.price != null) && purchaseLabel(r)].filter(Boolean).join(' · ')}</span></p>
                   </div>
                   ${scoreBox(r.score, 'оценка')}
                  </a>
@@ -307,6 +324,7 @@ function renderDrink(id) {
       <div class="drink__info">
         <h1 class="drink__name">${escape(drink.name)}</h1>
         <p class="muted drink__brand">${escape(drink.brand)}</p>
+        ${drink.avgPrice !== null ? `<p class="card__meta"><span>Средняя цена ≈ ${formatPrice(drink.avgPrice)} · по ${drink.priceCount} ${drink.priceCount % 10 === 1 && drink.priceCount % 100 !== 11 ? 'цене' : 'ценам'}</span></p>` : ''}
         ${drink.sugarFree ? '<p class="card__meta"><span class="tag">без сахара</span></p>' : ''}
       </div>
       ${scoreBox(drink.avg, votesLabel(drink.votes))}
@@ -339,6 +357,10 @@ function renderDrink(id) {
                  <input id="store" name="store" class="input" type="text" maxlength="100" list="stores" autocomplete="off" value="${escape(mine?.store ?? '')}" />
                  <datalist id="stores">${uniqueStores().map((s) => `<option value="${escape(s)}"></option>`).join('')}</datalist>
                </div>
+               <div class="field">
+                 <label class="field__label" for="price">Цена, ₽ (необязательно)</label>
+                 <input id="price" name="price" class="input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" value="${mine?.price ?? ''}" />
+               </div>
                <p id="rate-error" class="form__error" role="alert" hidden></p>
                <div class="actions">
                  <button class="btn btn--primary" type="submit">${mine ? 'Обновить оценку' : 'Сохранить оценку'}</button>
@@ -361,8 +383,8 @@ function renderDrink(id) {
                   <a class="card__user" href="#/u/${encodeURIComponent(r.user.nick)}">
                     ${avatar(r.user)}
                     <span class="card__body">
-                      <span class="card__name">${escape(r.user.nick)}</span>
-                      ${r.store ? `<span class="card__meta"><span>куплен: ${escape(r.store)}</span></span>` : ''}
+                      <span class="card__name">${displayName(r.user)}${nickTag(r.user)}</span>
+                      ${r.store || r.price != null ? `<span class="card__meta"><span>${purchaseLabel(r)}</span></span>` : ''}
                     </span>
                   </a>
                   ${scoreBox(r.score, 'оценка')}
@@ -405,9 +427,15 @@ function renderDrink(id) {
       const data = new FormData(form);
       const score = Number(data.get('score'));
       if (!chosen || !score) return showError(error, { message: 'Выберите оценку от 1 до 10.' });
+      const priceRaw = String(data.get('price') || '').trim();
+      let price = null;
+      if (priceRaw) {
+        price = /^[0-9]{1,4}$/.test(priceRaw) ? Number(priceRaw) : NaN;
+        if (!(price >= 1 && price <= 5000)) return showError(error, { message: 'Цена — целое число рублей от 1 до 5000.' });
+      }
       await busy(form, async () => {
         try {
-          await rate(id, score, String(data.get('store') || '').trim());
+          await rate(id, score, String(data.get('store') || '').trim(), price);
           notice = 'Оценка сохранена.';
           await reload();
         } catch (err) {
@@ -465,7 +493,7 @@ function renderDrinkForm(drink) {
   const color = (drink?.color || CAN_COLORS[0]).toLowerCase();
   const brands = [...new Set(drinks.map((d) => d.brand))].sort((a, b) => a.localeCompare(b, 'ru'));
 
-  app.innerHTML = `
+  app.innerHTML = `<div class="narrow">
     <a class="link back" href="${editing ? `#/d/${drink.id}` : '#/'}">← Назад</a>
     <section class="hero"><h1>${editing ? 'Редактировать энергетик' : 'Новый энергетик'}</h1></section>
     <form id="drink-form" class="form" novalidate>
@@ -505,7 +533,7 @@ function renderDrinkForm(drink) {
       </div>
       <p id="form-error" class="form__error" role="alert" hidden></p>
       <button class="btn btn--primary" type="submit">${editing ? 'Сохранить' : 'Добавить энергетик'}</button>
-    </form>`;
+    </form></div>`;
 
   const form = document.getElementById('drink-form');
   const error = document.getElementById('form-error');
@@ -575,14 +603,15 @@ function renderDrinkForm(drink) {
 
 function renderMe() {
   const me = users.find((u) => u.id === currentUser().id) || currentUser();
-  app.innerHTML = `
+  app.innerHTML = `<div class="narrow">
     <a class="link back" href="#/u/${encodeURIComponent(me.nick)}">← Мой профиль</a>
     <section class="hero"><h1>Редактировать профиль</h1></section>
     ${takeNotice()}
     <section class="profile">
       ${avatar(me).replace('avatar', 'avatar avatar--lg')}
       <div>
-        <h2 class="profile__nick">${escape(me.nick)}</h2>
+        <h2 class="profile__nick">${displayName(me)}</h2>
+        ${me.name ? `<p class="muted profile__handle">@${escape(me.nick)}</p>` : ''}
         <p class="muted profile__stats">Ник менять нельзя</p>
       </div>
     </section>
@@ -599,10 +628,11 @@ function renderMe() {
       </div>
     </form>
     <form id="city-form" class="form" novalidate>
+      ${field({ id: 'name', label: 'Имя (необязательно)', autocomplete: 'nickname', hint: 'Показывается вместо ника. Ник — ваш логин и адрес профиля, его изменить нельзя.', extra: `maxlength="40" value="${escape(me.name ?? '')}"` })}
       ${field({ id: 'city', label: 'Город (необязательно)', autocomplete: 'address-level2', extra: `maxlength="60" value="${escape(me.city ?? '')}"` })}
       <p id="city-error" class="form__error" role="alert" hidden></p>
-      <button class="btn btn--primary" type="submit">Сохранить город</button>
-    </form>`;
+      <button class="btn btn--primary" type="submit">Сохранить имя и город</button>
+    </form></div>`;
 
   const avatarForm = document.getElementById('avatar-form');
   const avatarError = document.getElementById('avatar-error');
@@ -639,12 +669,16 @@ function renderMe() {
   cityForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     cityError.hidden = true;
-    const city = String(new FormData(cityForm).get('city')).trim();
+    const fd = new FormData(cityForm);
+    const name = String(fd.get('name')).trim().replace(/ {2,}/g, ' ');
+    const city = String(fd.get('city')).trim();
+    if ([...name].length > 40 || (name && !/^[\p{L}\p{M}\p{N} .'-]+$/u.test(name)))
+      return showError(cityError, { message: 'Имя: до 40 символов — буквы, цифры, пробел, точка, дефис и апостроф.' });
     if (city.length > 60) return showError(cityError, { message: 'Город: не длиннее 60 символов.' });
     await busy(cityForm, async () => {
       try {
-        await updateProfile(city);
-        notice = 'Город сохранён.';
+        await updateProfile(name, city);
+        notice = 'Профиль сохранён.';
         await reload();
       } catch (err) {
         showError(cityError, err);
@@ -660,7 +694,7 @@ function renderAccount() {
   const me = currentUser();
   account.innerHTML = me
     ? `<a class="account__me" href="#/u/${encodeURIComponent(me.nick)}">
-         ${avatar(me)}<span class="account__nick">${escape(me.nick)}</span>
+         ${avatar(me)}<span class="account__nick">${displayName(me)}</span>
        </a>
        <button class="btn btn--ghost btn--sm" type="button" id="logout">Выйти</button>`
     : '<a class="btn btn--ghost" href="#/login">Войти</a>';
@@ -698,7 +732,7 @@ function bindForm(onSubmit) {
 }
 
 function renderLogin() {
-  app.innerHTML = `
+  app.innerHTML = `<div class="narrow narrow--card">
     <section class="hero"><h1>Вход</h1></section>
     <form id="auth-form" class="form" novalidate>
       ${field({ id: 'nick', label: 'Ник', autocomplete: 'username', extra: 'autocapitalize="none" spellcheck="false"' })}
@@ -706,7 +740,7 @@ function renderLogin() {
       <p id="auth-error" class="form__error" role="alert" hidden></p>
       <button class="btn btn--primary" type="submit">Войти</button>
     </form>
-    <p class="muted form__alt">Ещё нет аккаунта? <a class="link" href="#/register">Зарегистрироваться</a></p>`;
+    <p class="muted form__alt">Ещё нет аккаунта? <a class="link" href="#/register">Зарегистрироваться</a></p></div>`;
 
   bindForm(async ({ nick, password }) => {
     if (!nick.trim() || !password) throw { message: 'Введите ник и пароль.' };
@@ -716,7 +750,7 @@ function renderLogin() {
 }
 
 function renderRegister() {
-  app.innerHTML = `
+  app.innerHTML = `<div class="narrow narrow--card">
     <section class="hero"><h1>Регистрация</h1></section>
     <form id="auth-form" class="form" novalidate>
       ${field({ id: 'nick', label: 'Ник', autocomplete: 'username', hint: '3–24 символа: латинские буквы, цифры и _', extra: 'autocapitalize="none" spellcheck="false" maxlength="24"' })}
@@ -725,7 +759,7 @@ function renderRegister() {
       <p id="auth-error" class="form__error" role="alert" hidden></p>
       <button class="btn btn--primary" type="submit">Зарегистрироваться</button>
     </form>
-    <p class="muted form__alt">Уже есть аккаунт? <a class="link" href="#/login">Войти</a></p>`;
+    <p class="muted form__alt">Уже есть аккаунт? <a class="link" href="#/login">Войти</a></p></div>`;
 
   bindForm(async ({ nick, password, password2 }) => {
     nick = nick.trim();

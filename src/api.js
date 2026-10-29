@@ -77,6 +77,10 @@ function apiError(err) {
       return { message: 'Оценка — целое число от 1 до 10.' };
     case 'store_invalid':
       return { message: 'Магазин: не длиннее 100 символов.', field: 'store' };
+    case 'price_invalid':
+      return { message: 'Цена — целое число рублей от 1 до 5000.', field: 'price' };
+    case 'user_name_invalid':
+      return { message: 'Имя: до 40 символов — буквы, цифры, пробел, точка, дефис и апостроф.', field: 'name' };
     case 'city_invalid':
       return { message: 'Город: не длиннее 60 символов.', field: 'city' };
     case 'too_large':
@@ -135,7 +139,7 @@ async function write(method, path, body) {
   }
 }
 
-export const rate = (drinkId, score, store) => write('PUT', `/api/ratings/${drinkId}`, { score, store });
+export const rate = (drinkId, score, store, price) => write('PUT', `/api/ratings/${drinkId}`, { score, store, price });
 export const unrate = (drinkId) => write('DELETE', `/api/ratings/${drinkId}`);
 
 export const createDrink = (drink) => write('POST', '/api/drinks', drink);
@@ -144,6 +148,16 @@ export const deleteDrink = (id) => write('DELETE', `/api/drinks/${id}`);
 export const uploadDrinkImage = (id, blob) => write('PUT', `/api/drinks/${id}/image`, blob);
 export const deleteDrinkImage = (id) => write('DELETE', `/api/drinks/${id}/image`);
 
-export const updateProfile = (city) => write('PATCH', '/api/me', { city });
+// Сервер отвечает name_invalid и на плохое имя участника, и на плохое название энергетика —
+// для профиля подменяем код, чтобы показать нужное сообщение.
+export const updateProfile = async (name, city) => {
+  try {
+    return await request('PATCH', '/api/me', { name, city });
+  } catch (err) {
+    console.error(err);
+    if (err.code === 'name_invalid') err.code = 'user_name_invalid';
+    throw apiError(err);
+  }
+};
 export const uploadAvatar = (blob) => write('PUT', '/api/me/avatar', blob);
 export const deleteAvatar = () => write('DELETE', '/api/me/avatar');
