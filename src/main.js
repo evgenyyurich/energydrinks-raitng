@@ -1,4 +1,9 @@
-import { loadData, currentUser, onAuthChange, login, register, logout } from './api.js';
+import {
+  loadData, currentUser, onAuthChange, login, register, logout,
+  rate, unrate, createDrink, updateDrink, deleteDrink, uploadDrinkImage, deleteDrinkImage,
+  updateProfile, uploadAvatar, deleteAvatar,
+} from './api.js';
+import { prepareDrinkPhoto, prepareAvatar } from './image.js';
 
 const app = document.getElementById('app');
 const account = document.getElementById('account');
@@ -40,6 +45,11 @@ const scoreBox = (value, caption) => `
     <small>${caption}</small>
   </div>`;
 
+// Миниатюра в карточке: фото (contain на нейтральном фоне) или цветная банка.
+const thumb = (drink) =>
+  drink.image
+    ? `<span class="card__thumb" aria-hidden="true"><img src="${escape(drink.image)}" alt="" loading="lazy" /></span>`
+    : can(drink);
 const can = (drink) => `<span class="card__can" style="--can:${drink.color}" aria-hidden="true"></span>`;
 // Картинка, если задан avatar, иначе кружок с первой буквой ника.
 const avatar = (user) =>
@@ -78,6 +88,7 @@ function renderDrinks() {
       <h1>Рейтинг энергетиков</h1>
       <p class="muted">Средний балл по оценкам всех участников.</p>
     </section>
+    ${currentUser() ? '<a class="btn btn--primary btn--block" href="#/add">+ Добавить энергетик</a>' : ''}
     <section class="controls">
       <input id="search" class="input" type="search" placeholder="Поиск по названию или бренду" autocomplete="off" />
       <select id="sort" class="input">
@@ -109,9 +120,10 @@ function renderDrinks() {
     list.innerHTML = items
       .map(
         (d, i) => `
-        <li class="card">
+        <li>
+         <a class="card card--link" href="#/d/${d.id}">
           <span class="card__rank">${i + 1}</span>
-          ${can(d)}
+          ${thumb(d)}
           <div class="card__body">
             <h2 class="card__name">${escape(d.name)}</h2>
             <p class="card__meta">
@@ -122,6 +134,7 @@ function renderDrinks() {
             </p>
           </div>
           ${scoreBox(d.avg, votesLabel(d.votes))}
+         </a>
         </li>`,
       )
       .join('');
@@ -195,6 +208,7 @@ function renderProfile(nick) {
         <p class="muted profile__stats">
           ${votesLabel(own.length)} · средняя ${avg === null ? '—' : avg.toFixed(1)}
         </p>
+        ${currentUser()?.id === user.id ? '<a class="btn btn--ghost btn--sm profile__edit" href="#/me">Редактировать</a>' : ''}
       </div>
     </section>
     ${
@@ -204,19 +218,450 @@ function renderProfile(nick) {
               .map((r) => {
                 const all = averages.get(r.drinkId);
                 return `
-                <li class="card card--profile">
-                  ${can(r.drink)}
+                <li>
+                 <a class="card card--link card--profile" href="#/d/${r.drinkId}">
+                  ${thumb(r.drink)}
                   <div class="card__body">
                     <h2 class="card__name">${escape(r.drink.name)}</h2>
                     <p class="card__meta"><span>${[`у всех в среднем ${all.toFixed(1)}`, r.store && `куплен: ${escape(r.store)}`].filter(Boolean).join(' · ')}</span></p>
                   </div>
                   ${scoreBox(r.score, 'оценка')}
+                 </a>
                 </li>`;
               })
               .join('')}
           </ol>`
         : '<p class="muted empty">Пока ничего не оценил.</p>'
     }`;
+}
+
+// ---------- Общие куски форм ----------
+
+// Одноразовое сообщение на следующей отрисовке (например, «Оценка сохранена»).
+let notice = '';
+const takeNotice = () => {
+  const n = notice;
+  notice = '';
+  return n ? `<p class="form__ok" role="status">${escape(n)}</p>` : '';
+};
+
+// Показывает ошибку в блоке; для дубликата добавляет ссылку на уже существующий энергетик.
+function showError(el, err) {
+  const text = escape(err?.message || 'Что-то пошло не так. Попробуйте ещё раз.');
+  const link = err?.id ? ` <a class="link" href="#/d/${Number(err.id)}">Открыть его</a>` : '';
+  el.innerHTML = text + link;
+  el.hidden = false;
+}
+
+// Блокирует кнопки формы на время запроса.
+async function busy(form, fn) {
+  const buttons = [...form.querySelectorAll('button')];
+  buttons.forEach((b) => (b.disabled = true));
+  try {
+    return await fn();
+  } finally {
+    buttons.forEach((b) => (b.disabled = false));
+  }
+}
+
+// Перезагружает данные с сервера и перерисовывает текущий экран (без прокрутки вверх).
+async function reload() {
+  ({ drinks, users, ratings } = await loadData());
+  route(false);
+}
+
+// ---------- Страница энергетика ----------
+
+const uniqueStores = () => [...new Set(ratings.map((r) => r.store).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru'));
+
+const bigCan = (drink) => `<span class="drink__can" style="--can:${escape(drink.color || '#1e3a8a')}" aria-hidden="true"></span>`;
+
+function renderDrink(id) {
+  const drink = drinkStats().find((d) => d.id === id);
+  if (!drink) {
+    app.innerHTML = `
+      <section class="hero">
+        <h1>Энергетик не найден</h1>
+        <p><a class="link" href="#/">← Ко всем энергетикам</a></p>
+      </section>`;
+    return;
+  }
+
+  const me = currentUser();
+  const all = ratings
+    .filter((r) => r.drinkId === id)
+    .map((r) => ({ ...r, user: users.find((u) => u.id === r.userId) }))
+    .filter((r) => r.user)
+    .sort((a, b) => b.score - a.score || a.user.nick.localeCompare(b.user.nick));
+  const mine = me ? all.find((r) => r.userId === me.id) : null;
+  const owner = !!me && drink.createdBy === me.id;
+
+  app.innerHTML = `
+    <a class="link back" href="#/">← Все энергетики</a>
+    ${takeNotice()}
+    <section class="drink">
+      <div class="drink__photo">
+        ${drink.image ? `<img src="${escape(drink.image)}" alt="${escape(drink.name)}" />` : bigCan(drink)}
+      </div>
+      <div class="drink__info">
+        <h1 class="drink__name">${escape(drink.name)}</h1>
+        <p class="muted drink__brand">${escape(drink.brand)}</p>
+        <p class="card__meta">
+          <span>${drink.volume} мл</span>
+          <span>${drink.caffeine} мг/100 мл</span>
+          ${drink.sugarFree ? '<span class="tag">без сахара</span>' : ''}
+        </p>
+      </div>
+      ${scoreBox(drink.avg, votesLabel(drink.votes))}
+    </section>
+    ${
+      owner
+        ? `<div class="actions">
+             <a class="btn btn--ghost" href="#/d/${id}/edit">Редактировать</a>
+             <button class="btn btn--ghost btn--danger" type="button" id="drink-delete">Удалить энергетик</button>
+           </div>
+           <p id="owner-error" class="form__error" role="alert" hidden></p>`
+        : ''
+    }
+
+    <section class="block" id="my-rating">
+      <h2 class="block__title">Моя оценка</h2>
+      ${
+        me
+          ? `<form id="rate-form" class="form" novalidate>
+               <div class="field slider ${mine ? '' : 'slider--unset'}">
+                 <label class="field__label" for="score">Оценка от 1 до 10</label>
+                 <p class="slider__value ${mine ? scoreClass(mine.score) : 'score--none'}" id="score-value" aria-hidden="true">${
+                   mine ? `<strong>${mine.score}</strong> / 10` : '<strong>—</strong> / 10'
+                 }</p>
+                 <input id="score" name="score" class="slider__input" type="range" min="1" max="10" step="1" value="${mine?.score ?? 5}" ${mine ? '' : 'aria-valuetext="не выбрана"'} />
+                 <div class="slider__ticks" aria-hidden="true">${Array.from({ length: 10 }, (_, i) => `<span>${i + 1}</span>`).join('')}</div>
+               </div>
+               <div class="field">
+                 <label class="field__label" for="store">Где куплен (необязательно)</label>
+                 <input id="store" name="store" class="input" type="text" maxlength="100" list="stores" autocomplete="off" value="${escape(mine?.store ?? '')}" />
+                 <datalist id="stores">${uniqueStores().map((s) => `<option value="${escape(s)}"></option>`).join('')}</datalist>
+               </div>
+               <p id="rate-error" class="form__error" role="alert" hidden></p>
+               <div class="actions">
+                 <button class="btn btn--primary" type="submit">${mine ? 'Обновить оценку' : 'Сохранить оценку'}</button>
+                 ${mine ? '<button class="btn btn--ghost btn--danger" type="button" id="rate-delete">Удалить оценку</button>' : ''}
+               </div>
+             </form>`
+          : '<p><a class="btn btn--primary" href="#/login">Войдите, чтобы оценить</a></p>'
+      }
+    </section>
+
+    <section class="block">
+      <h2 class="block__title">Все оценки · ${all.length}</h2>
+      ${
+        all.length
+          ? `<ol class="list">
+              ${all
+                .map(
+                  (r) => `
+                <li class="card card--rating">
+                  <a class="card__user" href="#/u/${encodeURIComponent(r.user.nick)}">
+                    ${avatar(r.user)}
+                    <span class="card__body">
+                      <span class="card__name">${escape(r.user.nick)}</span>
+                      ${r.store ? `<span class="card__meta"><span>куплен: ${escape(r.store)}</span></span>` : ''}
+                    </span>
+                  </a>
+                  ${scoreBox(r.score, 'оценка')}
+                </li>`,
+                )
+                .join('')}
+            </ol>`
+          : '<p class="muted empty">Пока никто не оценил.</p>'
+      }
+    </section>`;
+
+  const form = document.getElementById('rate-form');
+  if (form) {
+    const error = document.getElementById('rate-error');
+    const slider = document.getElementById('score');
+    const shown = document.getElementById('score-value');
+    const saveBtn = form.querySelector('button[type="submit"]');
+    let chosen = !!mine;
+    saveBtn.disabled = !chosen;
+    // Оценка «выбрана», только когда пользователь тронул ползунок: случайное значение по умолчанию не сохраняем.
+    const choose = () => {
+      const v = Number(slider.value);
+      chosen = true;
+      saveBtn.disabled = false;
+      form.querySelector('.slider').classList.remove('slider--unset');
+      shown.className = `slider__value ${scoreClass(v)}`;
+      shown.innerHTML = `<strong>${v}</strong> / 10`;
+      slider.setAttribute('aria-valuetext', `${v} из 10`);
+    };
+    slider.addEventListener('input', choose);
+    slider.addEventListener('change', choose);
+    slider.addEventListener('pointerdown', choose);
+    slider.addEventListener('keydown', (e) => {
+      if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End') setTimeout(choose);
+    });
+    if (mine) slider.setAttribute('aria-valuetext', `${mine.score} из 10`);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      error.hidden = true;
+      const data = new FormData(form);
+      const score = Number(data.get('score'));
+      if (!chosen || !score) return showError(error, { message: 'Выберите оценку от 1 до 10.' });
+      await busy(form, async () => {
+        try {
+          await rate(id, score, String(data.get('store') || '').trim());
+          notice = 'Оценка сохранена.';
+          await reload();
+        } catch (err) {
+          showError(error, err);
+        }
+      });
+    });
+    document.getElementById('rate-delete')?.addEventListener('click', () =>
+      busy(form, async () => {
+        error.hidden = true;
+        try {
+          await unrate(id);
+          notice = 'Оценка удалена.';
+          await reload();
+        } catch (err) {
+          showError(error, err);
+        }
+      }),
+    );
+  }
+
+  document.getElementById('drink-delete')?.addEventListener('click', async (e) => {
+    if (!confirm(`Удалить «${drink.name}» вместе со всеми оценками?`)) return;
+    const error = document.getElementById('owner-error');
+    error.hidden = true;
+    e.target.disabled = true;
+    try {
+      await deleteDrink(id);
+      ({ drinks, users, ratings } = await loadData());
+      location.hash = '#/';
+    } catch (err) {
+      showError(error, err);
+      e.target.disabled = false;
+    }
+  });
+}
+
+// ---------- Добавление и правка энергетика ----------
+
+const CAN_COLORS = ['#1e3a8a', '#166534', '#b91c1c', '#7c2d12', '#ca8a04', '#4c1d95', '#111827', '#9ca3af', '#0e7490', '#be185d'];
+
+// drink === null — добавление, иначе правка существующего (только автор).
+function renderDrinkForm(drink) {
+  const me = currentUser();
+  const editing = !!drink;
+  if (editing && drink.createdBy !== me.id) {
+    app.innerHTML = `
+      <section class="hero">
+        <h1>Нет доступа</h1>
+        <p class="muted">Править энергетик может только тот, кто его добавил.</p>
+        <p><a class="link" href="#/d/${drink.id}">← К энергетику</a></p>
+      </section>`;
+    return;
+  }
+  const color = (drink?.color || CAN_COLORS[0]).toLowerCase();
+  const brands = [...new Set(drinks.map((d) => d.brand))].sort((a, b) => a.localeCompare(b, 'ru'));
+
+  app.innerHTML = `
+    <a class="link back" href="${editing ? `#/d/${drink.id}` : '#/'}">← Назад</a>
+    <section class="hero"><h1>${editing ? 'Редактировать энергетик' : 'Новый энергетик'}</h1></section>
+    <form id="drink-form" class="form" novalidate>
+      ${field({ id: 'name', label: 'Название', autocomplete: 'off', extra: `maxlength="60" required value="${escape(drink?.name ?? '')}"` })}
+      <div class="field">
+        <label class="field__label" for="brand">Бренд</label>
+        <input id="brand" name="brand" class="input" type="text" autocomplete="off" maxlength="40" required list="brands" value="${escape(drink?.brand ?? '')}" />
+        <datalist id="brands">${brands.map((b) => `<option value="${escape(b)}"></option>`).join('')}</datalist>
+      </div>
+      ${field({ id: 'volume', label: 'Объём, мл', type: 'number', autocomplete: 'off', hint: 'От 50 до 2000', extra: `inputmode="numeric" min="50" max="2000" step="1" required value="${drink?.volume ?? ''}"` })}
+      ${field({ id: 'caffeine', label: 'Кофеин, мг на 100 мл', type: 'number', autocomplete: 'off', hint: 'От 0 до 100', extra: `inputmode="numeric" min="0" max="100" step="1" required value="${drink?.caffeine ?? ''}"` })}
+      <label class="check">
+        <input type="checkbox" name="sugarFree" ${drink?.sugarFree ? 'checked' : ''} />
+        <span>Без сахара</span>
+      </label>
+      <fieldset class="swatches">
+        <legend class="field__label">Цвет банки (если нет фото)</legend>
+        <div class="swatches__row">
+          ${CAN_COLORS.map(
+            (c) => `<label class="swatch" style="--c:${c}">
+              <input type="radio" name="color" value="${c}" ${c === color ? 'checked' : ''} aria-label="Цвет ${c}" />
+              <span></span>
+            </label>`,
+          ).join('')}
+        </div>
+      </fieldset>
+      <div class="field">
+        <label class="field__label" for="photo">Фото (необязательно)</label>
+        <div class="photo-preview" id="photo-preview" ${drink?.image ? '' : 'hidden'}>
+          ${drink?.image ? `<img src="${escape(drink.image)}" alt="" />` : ''}
+        </div>
+        <input id="photo" name="photo" class="input input--file" type="file" accept="image/*" />
+        <small class="field__hint muted">Фото уменьшится прямо на устройстве; геометки и прочие данные съёмки не отправляются.</small>
+        ${
+          drink?.image
+            ? `<label class="check"><input type="checkbox" name="removePhoto" /><span>Удалить текущее фото</span></label>`
+            : ''
+        }
+      </div>
+      <p id="form-error" class="form__error" role="alert" hidden></p>
+      <button class="btn btn--primary" type="submit">${editing ? 'Сохранить' : 'Добавить энергетик'}</button>
+    </form>`;
+
+  const form = document.getElementById('drink-form');
+  const error = document.getElementById('form-error');
+  const preview = document.getElementById('photo-preview');
+  const photo = document.getElementById('photo');
+  let previewUrl = null;
+
+  photo.addEventListener('change', () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = null;
+    const file = photo.files[0];
+    if (!file) return;
+    previewUrl = URL.createObjectURL(file);
+    preview.hidden = false;
+    preview.innerHTML = '<img alt="" />';
+    preview.firstChild.src = previewUrl;
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    error.hidden = true;
+    const data = new FormData(form);
+    const body = {
+      name: String(data.get('name')).trim(),
+      brand: String(data.get('brand')).trim(),
+      volume: Number(data.get('volume')),
+      caffeine: Number(data.get('caffeine')),
+      sugarFree: data.has('sugarFree'),
+      color: String(data.get('color')),
+    };
+    const bad = (message, f) => {
+      showError(error, { message });
+      form.elements[f]?.focus();
+    };
+    if (!body.name || body.name.length > 60) return bad('Название обязательно, не длиннее 60 символов.', 'name');
+    if (!body.brand || body.brand.length > 40) return bad('Бренд обязателен, не длиннее 40 символов.', 'brand');
+    if (!Number.isInteger(body.volume) || body.volume < 50 || body.volume > 2000)
+      return bad('Объём: целое число от 50 до 2000 мл.', 'volume');
+    if (!Number.isInteger(body.caffeine) || body.caffeine < 0 || body.caffeine > 100)
+      return bad('Кофеин: целое число от 0 до 100 мг на 100 мл.', 'caffeine');
+
+    await busy(form, async () => {
+      try {
+        // Фото готовим до сохранения: если картинка не читается, энергетик не создаётся наполовину.
+        const file = photo.files[0];
+        const blob = file ? await prepareDrinkPhoto(file) : null;
+
+        const id = editing ? drink.id : (await createDrink(body)).id;
+        if (editing) await updateDrink(id, body);
+
+        let warning = '';
+        try {
+          if (blob) await uploadDrinkImage(id, blob);
+          else if (editing && data.has('removePhoto')) await deleteDrinkImage(id);
+        } catch (err) {
+          warning = ` Фото не загрузилось: ${err.message}`;
+        }
+        notice = (editing ? 'Изменения сохранены.' : 'Энергетик добавлен. Теперь можно поставить оценку.') + warning;
+        ({ drinks, users, ratings } = await loadData());
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        scrollToRating = !editing;
+        if (location.hash === `#/d/${id}`) route();
+        else location.hash = `#/d/${id}`;
+      } catch (err) {
+        showError(error, err);
+        if (err.field) form.elements[err.field]?.focus();
+      }
+    });
+  });
+}
+
+// ---------- Мой профиль ----------
+
+function renderMe() {
+  const me = users.find((u) => u.id === currentUser().id) || currentUser();
+  app.innerHTML = `
+    <a class="link back" href="#/u/${encodeURIComponent(me.nick)}">← Мой профиль</a>
+    <section class="hero"><h1>Редактировать профиль</h1></section>
+    ${takeNotice()}
+    <section class="profile">
+      ${avatar(me).replace('avatar', 'avatar avatar--lg')}
+      <div>
+        <h2 class="profile__nick">${escape(me.nick)}</h2>
+        <p class="muted profile__stats">Ник менять нельзя</p>
+      </div>
+    </section>
+    <form id="avatar-form" class="form" novalidate>
+      <div class="field">
+        <label class="field__label" for="avatar-file">Аватарка</label>
+        <input id="avatar-file" class="input input--file" type="file" accept="image/*" />
+        <small class="field__hint muted">Фото обрежется до квадрата и уменьшится на устройстве.</small>
+      </div>
+      <p id="avatar-error" class="form__error" role="alert" hidden></p>
+      <div class="actions">
+        <button class="btn btn--primary" type="submit">Загрузить аватарку</button>
+        ${me.avatar ? '<button class="btn btn--ghost btn--danger" type="button" id="avatar-delete">Убрать аватарку</button>' : ''}
+      </div>
+    </form>
+    <form id="city-form" class="form" novalidate>
+      ${field({ id: 'city', label: 'Город (необязательно)', autocomplete: 'address-level2', extra: `maxlength="60" value="${escape(me.city ?? '')}"` })}
+      <p id="city-error" class="form__error" role="alert" hidden></p>
+      <button class="btn btn--primary" type="submit">Сохранить город</button>
+    </form>`;
+
+  const avatarForm = document.getElementById('avatar-form');
+  const avatarError = document.getElementById('avatar-error');
+  avatarForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    avatarError.hidden = true;
+    const file = document.getElementById('avatar-file').files[0];
+    if (!file) return showError(avatarError, { message: 'Сначала выберите фото.' });
+    await busy(avatarForm, async () => {
+      try {
+        await uploadAvatar(await prepareAvatar(file));
+        notice = 'Аватарка обновлена.';
+        await reload();
+      } catch (err) {
+        showError(avatarError, err);
+      }
+    });
+  });
+  document.getElementById('avatar-delete')?.addEventListener('click', () =>
+    busy(avatarForm, async () => {
+      avatarError.hidden = true;
+      try {
+        await deleteAvatar();
+        notice = 'Аватарка убрана.';
+        await reload();
+      } catch (err) {
+        showError(avatarError, err);
+      }
+    }),
+  );
+
+  const cityForm = document.getElementById('city-form');
+  const cityError = document.getElementById('city-error');
+  cityForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    cityError.hidden = true;
+    const city = String(new FormData(cityForm).get('city')).trim();
+    if (city.length > 60) return showError(cityError, { message: 'Город: не длиннее 60 символов.' });
+    await busy(cityForm, async () => {
+      try {
+        await updateProfile(city);
+        notice = 'Город сохранён.';
+        await reload();
+      } catch (err) {
+        showError(cityError, err);
+      }
+    });
+  });
 }
 
 // ---------- Шапка и авторизация ----------
@@ -314,11 +759,16 @@ function renderRegister() {
 
 // ---------- Маршруты ----------
 
-function route() {
+// Нужна ли после отрисовки прокрутка к форме оценки (после добавления энергетика).
+let scrollToRating = false;
+
+function route(scrollTop = true) {
   const hash = location.hash.replace(/^#/, '') || '/';
   const profile = hash.match(/^\/u\/(.+)$/);
+  const drinkPage = hash.match(/^\/d\/(\d{1,9})(\/edit)?$/);
   const isAuthPage = hash === '/login' || hash === '/register';
-  const tab = hash === '/people' || profile ? 'people' : isAuthPage ? null : 'drinks';
+  const needsLogin = hash === '/add' || hash === '/me' || !!drinkPage?.[2];
+  const tab = hash === '/people' || profile ? 'people' : isAuthPage || hash === '/me' ? null : 'drinks';
 
   tabs.forEach((t) => t.classList.toggle('tabs__item--active', t.dataset.tab === tab));
   if (!isAuthPage) returnTo = location.hash || '#/';
@@ -329,13 +779,32 @@ function route() {
     return;
   }
 
+  // Страницы для вошедших: гостя отправляем на вход, после входа вернёмся сюда.
+  if (needsLogin && !currentUser()) {
+    location.replace('#/login');
+    return;
+  }
+
   if (hash === '/login') renderLogin();
   else if (hash === '/register') renderRegister();
   else if (profile) renderProfile(decodeURIComponent(profile[1]));
+  else if (hash === '/add') renderDrinkForm(null);
+  else if (hash === '/me') renderMe();
+  else if (drinkPage) {
+    const id = Number(drinkPage[1]);
+    if (drinkPage[2]) {
+      const drink = drinks.find((d) => d.id === id);
+      if (drink) renderDrinkForm(drink);
+      else renderDrink(id);
+    } else renderDrink(id);
+  }
   else if (hash === '/people') renderPeople();
   else renderDrinks();
 
-  window.scrollTo(0, 0);
+  if (scrollToRating) {
+    scrollToRating = false;
+    document.getElementById('my-rating')?.scrollIntoView();
+  } else if (scrollTop) window.scrollTo(0, 0);
 }
 
 async function start() {
@@ -351,9 +820,17 @@ async function start() {
       </section>`;
     return;
   }
-  window.addEventListener('hashchange', route);
+  window.addEventListener('hashchange', () => route());
   // Шапка обновляется при входе/выходе без перезагрузки страницы.
-  onAuthChange(renderAccount);
+  let lastUserId = currentUser()?.id ?? null;
+  onAuthChange((user) => {
+    renderAccount();
+    // Вошли или вышли — перерисовываем экран (формы оценки, кнопки «Добавить» и т.п.), кроме страниц входа.
+    if ((user?.id ?? null) !== lastUserId) {
+      lastUserId = user?.id ?? null;
+      if (!/^#\/(login|register)$/.test(location.hash)) route(false);
+    }
+  });
   account.addEventListener('click', (e) => {
     if (e.target.closest('#logout')) logout().catch((err) => alert(err.message));
   });

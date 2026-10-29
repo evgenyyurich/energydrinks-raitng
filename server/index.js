@@ -3,7 +3,7 @@
 import { createServer } from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { stat, mkdir, writeFile, unlink } from 'node:fs/promises';
 import { resolve, join, extname, sep } from 'node:path';
 import { openDb, UPLOADS_DIR } from './lib/db.js';
 import { hashPassword, verifyPassword, dummyHash } from './lib/password.js';
@@ -16,11 +16,13 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map((s) =
 const DIST = resolve(import.meta.dirname, '..', 'dist');
 const COOKIE = 'sid';
 const SESSION_MS = 30 * 24 * 3600 * 1000;
-const MAX_BODY = 16 * 1024;
+const MAX_BODY = 16 * 1024; // JSON
+const MAX_UPLOAD = 2 * 1024 * 1024; // картинки (браузер заранее ужимает до ~100–300 КБ)
+const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
 const db = openDb();
 const q = {
-  drinks: db.prepare('SELECT id, name, brand, volume, caffeine, sugar_free, color FROM drinks ORDER BY id'),
+  drinks: db.prepare('SELECT id, name, brand, volume, caffeine, sugar_free, color, image, created_by FROM drinks ORDER BY id'),
   users: db.prepare('SELECT id, nick, avatar, city FROM users ORDER BY id'),
   ratings: db.prepare('SELECT user_id, drink_id, score, store FROM ratings ORDER BY id'),
   userByNick: db.prepare('SELECT id, nick, avatar, city, password_hash FROM users WHERE nick = ?'),
@@ -30,6 +32,23 @@ const q = {
     `SELECT u.id, u.nick, u.avatar, u.city FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.token_hash = ? AND s.expires_at > ?`,
   ),
+  drinkById: db.prepare('SELECT id, name, brand, image, created_by FROM drinks WHERE id = ?'),
+  drinkNames: db.prepare('SELECT id, name, brand FROM drinks'),
+  insertDrink: db.prepare(
+    'INSERT INTO drinks (name, brand, volume, caffeine, sugar_free, color, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  ),
+  updateDrink: db.prepare('UPDATE drinks SET name = ?, brand = ?, volume = ?, caffeine = ?, sugar_free = ?, color = ? WHERE id = ?'),
+  setDrinkImage: db.prepare('UPDATE drinks SET image = ? WHERE id = ?'),
+  deleteDrink: db.prepare('DELETE FROM drinks WHERE id = ?'),
+  upsertRating: db.prepare(
+    `INSERT INTO ratings (user_id, drink_id, score, store) VALUES (?, ?, ?, ?)
+     ON CONFLICT (user_id, drink_id) DO UPDATE SET
+       score = excluded.score, store = excluded.store, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+  ),
+  deleteRating: db.prepare('DELETE FROM ratings WHERE user_id = ? AND drink_id = ?'),
+  userById: db.prepare('SELECT id, nick, avatar, city FROM users WHERE id = ?'),
+  setCity: db.prepare('UPDATE users SET city = ? WHERE id = ?'),
+  setAvatar: db.prepare('UPDATE users SET avatar = ? WHERE id = ?'),
   deleteSession: db.prepare('DELETE FROM sessions WHERE token_hash = ?'),
   purgeSessions: db.prepare('DELETE FROM sessions WHERE expires_at <= ?'),
 };
@@ -43,10 +62,11 @@ const publicUser = (u) => ({ id: u.id, nick: u.nick, avatar: avatarUrl(u.avatar)
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 
 class HttpError extends Error {
-  constructor(status, code) {
+  constructor(status, code, extra) {
     super(code);
     this.status = status;
     this.code = code;
+    this.extra = extra; // доп. поля ответа, например id существующего энергетика
   }
 }
 
@@ -99,10 +119,11 @@ setInterval(() => {
   for (const [k, hits] of buckets) if (!hits.some((t) => now - t < 60_000)) buckets.delete(k);
 }, 60_000).unref();
 
-// CSRF: только JSON (или multipart для будущих загрузок) и Origin, совпадающий с сайтом.
-function checkCsrf(req) {
+// CSRF: только JSON и Origin, совпадающий с сайтом. Маршруты загрузки картинок дополнительно принимают
+// image/jpeg|png|webp (extraTypes): это не «простые» типы CORS, поэтому чужая форма их отправить не может.
+function checkCsrf(req, extraTypes = []) {
   const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
-  if (type !== 'application/json' && type !== 'multipart/form-data') throw new HttpError(415, 'unsupported_media_type');
+  if (type !== 'application/json' && !extraTypes.includes(type)) throw new HttpError(415, 'unsupported_media_type');
   const origin = req.headers.origin;
   if (origin) {
     const host = (TRUST_PROXY && req.headers['x-forwarded-host']) || req.headers.host;
@@ -114,16 +135,22 @@ function checkCsrf(req) {
   }
 }
 
-async function readJson(req) {
+async function readBody(req, limit) {
+  if (Number(req.headers['content-length']) > limit) throw new HttpError(413, 'too_large');
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > MAX_BODY) throw new HttpError(413, 'too_large');
+    if (size > limit) throw new HttpError(413, 'too_large');
     chunks.push(chunk);
   }
+  return Buffer.concat(chunks);
+}
+
+async function readJson(req) {
+  const raw = await readBody(req, MAX_BODY);
   try {
-    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const body = JSON.parse(raw.toString('utf8'));
     if (body && typeof body === 'object' && !Array.isArray(body)) return body;
   } catch {}
   throw new HttpError(400, 'bad_request');
@@ -141,6 +168,121 @@ function startSession(res, userId) {
   return { 'Set-Cookie': cookie(token, SESSION_MS / 1000) };
 }
 
+// Запись только для вошедших; заодно общий лимит на запись с одного IP.
+function requireUser(req) {
+  const user = sessionUser(req);
+  if (!user) throw new HttpError(401, 'auth_required');
+  rateLimit('write', clientIp(req), 120);
+  return user;
+}
+
+// ---------- Проверка входных данных ----------
+
+// Строка: обрезаем пробелы по краям, без управляющих символов; пустая необязательная -> null.
+function cleanStr(v, { max, required = false, code }) {
+  if (v === undefined || v === null) v = '';
+  if (typeof v !== 'string') throw new HttpError(400, code);
+  const s = v.trim();
+  if (/[\u0000-\u001f\u007f]/.test(s)) throw new HttpError(400, code);
+  if (required && !s) throw new HttpError(400, code);
+  if ([...s].length > max) throw new HttpError(400, code);
+  return s || null;
+}
+
+function cleanInt(v, min, max, code) {
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < min || v > max) throw new HttpError(400, code);
+  return v;
+}
+
+const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+function cleanDrink(body) {
+  const color = body.color ?? '#1e3a8a';
+  if (typeof color !== 'string' || !COLOR_RE.test(color)) throw new HttpError(400, 'color_invalid');
+  if (typeof (body.sugarFree ?? false) !== 'boolean') throw new HttpError(400, 'bad_request');
+  return {
+    name: cleanStr(body.name, { max: 60, required: true, code: 'name_invalid' }),
+    brand: cleanStr(body.brand, { max: 40, required: true, code: 'brand_invalid' }),
+    volume: cleanInt(body.volume, 50, 2000, 'volume_invalid'),
+    caffeine: cleanInt(body.caffeine, 0, 100, 'caffeine_invalid'),
+    sugarFree: body.sugarFree ? 1 : 0,
+    color: color.toLowerCase(),
+  };
+}
+
+// Название + бренд без учёта регистра (в т.ч. кириллица, которую SQLite lower() не понимает).
+const nameKey = (d) => `${d.name.trim().toLocaleLowerCase('ru')}\0${d.brand.trim().toLocaleLowerCase('ru')}`;
+function assertNotDuplicate(d, exceptId = 0) {
+  const key = nameKey(d);
+  const dup = q.drinkNames.all().find((x) => x.id !== exceptId && nameKey(x) === key);
+  if (dup) throw new HttpError(409, 'duplicate', { id: dup.id });
+}
+
+// Маршруты вида /api/drinks/:id — только числовые id.
+function idParam(s) {
+  if (!/^[1-9]\d{0,9}$/.test(s)) throw new HttpError(404, 'not_found');
+  return Number(s);
+}
+
+function drinkOf(idStr) {
+  const drink = q.drinkById.get(idParam(idStr));
+  if (!drink) throw new HttpError(404, 'not_found');
+  return drink;
+}
+
+// Править и удалять энергетик может только тот, кто его добавил.
+function ownDrink(user, idStr) {
+  const drink = drinkOf(idStr);
+  if (drink.created_by === null || drink.created_by !== user.id) throw new HttpError(403, 'forbidden');
+  return drink;
+}
+
+// ---------- Картинки ----------
+
+// Тип определяем по первым байтам, а не по заголовку или имени файла. SVG и прочее не принимаем.
+function detectImage(buf) {
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return { ext: 'jpg', type: 'image/jpeg' };
+  if (buf.length >= 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])))
+    return { ext: 'png', type: 'image/png' };
+  if (buf.length >= 12 && buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP')
+    return { ext: 'webp', type: 'image/webp' };
+  return null;
+}
+
+// Читает тело запроса как картинку и сохраняет под случайным именем; возвращает имя файла.
+async function receiveImage(req) {
+  rateLimit('upload', clientIp(req), 20);
+  const buf = await readBody(req, MAX_UPLOAD);
+  const kind = detectImage(buf);
+  const declared = String(req.headers['content-type']).split(';')[0].trim().toLowerCase();
+  if (!kind || kind.type !== declared) throw new HttpError(400, 'bad_image');
+  await mkdir(UPLOADS_DIR, { recursive: true });
+  const name = `${randomBytes(16).toString('hex')}.${kind.ext}`;
+  await writeFile(join(UPLOADS_DIR, name), buf, { flag: 'wx' });
+  return name;
+}
+
+// Удаляет файл из папки загрузок; имя берётся из нашей базы, но проверяем и его.
+async function removeUpload(name) {
+  if (!name || !/^[\w.-]+$/.test(name)) return;
+  try {
+    await unlink(join(UPLOADS_DIR, name));
+  } catch {}
+}
+
+// Сохраняет новый файл в БД через save; при ошибке убирает его и оставляет старый.
+async function replaceImage(req, oldName, save) {
+  const name = await receiveImage(req);
+  try {
+    save(name);
+  } catch (err) {
+    await removeUpload(name);
+    throw err;
+  }
+  await removeUpload(oldName);
+  return name;
+}
+
 // ---------- API ----------
 
 const NICK_RE = /^[A-Za-z0-9_]{3,24}$/;
@@ -150,7 +292,7 @@ const routes = {
     send(res, 200, {
       drinks: q.drinks.all().map((d) => ({
         id: d.id, name: d.name, brand: d.brand, volume: d.volume, caffeine: d.caffeine,
-        sugarFree: !!d.sugar_free, color: d.color,
+        sugarFree: !!d.sugar_free, color: d.color, image: avatarUrl(d.image), createdBy: d.created_by,
       })),
       users: q.users.all().map(publicUser),
       ratings: q.ratings.all().map((r) => ({ userId: r.user_id, drinkId: r.drink_id, score: r.score, store: r.store ?? null })),
@@ -193,6 +335,45 @@ const routes = {
     send(res, 200, { user: publicUser(user) }, startSession(res, user.id));
   },
 
+  'POST /api/drinks': async (req, res) => {
+    checkCsrf(req);
+    const user = requireUser(req);
+    const d = cleanDrink(await readJson(req));
+    assertNotDuplicate(d);
+    let id;
+    try {
+      id = Number(q.insertDrink.run(d.name, d.brand, d.volume, d.caffeine, d.sugarFree, d.color, user.id).lastInsertRowid);
+    } catch (err) {
+      if (/UNIQUE/i.test(err.message)) throw new HttpError(409, 'duplicate');
+      throw err;
+    }
+    send(res, 201, { id });
+  },
+
+  'PATCH /api/me': async (req, res) => {
+    checkCsrf(req);
+    const user = requireUser(req);
+    const body = await readJson(req);
+    const city = cleanStr(body.city, { max: 60, code: 'city_invalid' });
+    q.setCity.run(city, user.id);
+    send(res, 200, { user: publicUser(q.userById.get(user.id)) });
+  },
+
+  'PUT /api/me/avatar': async (req, res) => {
+    checkCsrf(req, IMAGE_TYPES);
+    const user = requireUser(req);
+    const name = await replaceImage(req, user.avatar, (n) => q.setAvatar.run(n, user.id));
+    send(res, 200, { avatar: avatarUrl(name) });
+  },
+
+  'DELETE /api/me/avatar': async (req, res) => {
+    checkCsrf(req);
+    const user = requireUser(req);
+    q.setAvatar.run(null, user.id);
+    await removeUpload(user.avatar);
+    send(res, 200, { ok: true });
+  },
+
   'POST /api/logout': (req, res) => {
     checkCsrf(req);
     const token = parseCookies(req.headers.cookie)[COOKIE];
@@ -200,6 +381,63 @@ const routes = {
     send(res, 200, { ok: true }, { 'Set-Cookie': cookie('', 0) });
   },
 };
+
+// Маршруты с параметром: [метод, шаблон, обработчик(req, res, ...группы)]. Id проверяет idParam (только цифры).
+const paramRoutes = [
+  ['PUT', /^\/api\/ratings\/([^/]+)$/, async (req, res, idStr) => {
+    checkCsrf(req);
+    const user = requireUser(req);
+    const drink = drinkOf(idStr);
+    const body = await readJson(req);
+    const score = cleanInt(body.score, 1, 10, 'score_invalid');
+    const store = cleanStr(body.store, { max: 100, code: 'store_invalid' });
+    q.upsertRating.run(user.id, drink.id, score, store);
+    send(res, 200, { ok: true });
+  }],
+  ['DELETE', /^\/api\/ratings\/([^/]+)$/, async (req, res, idStr) => {
+    checkCsrf(req);
+    const user = requireUser(req);
+    q.deleteRating.run(user.id, drinkOf(idStr).id);
+    send(res, 200, { ok: true });
+  }],
+  ['PATCH', /^\/api\/drinks\/([^/]+)$/, async (req, res, idStr) => {
+    checkCsrf(req);
+    const user = requireUser(req);
+    const drink = ownDrink(user, idStr);
+    const d = cleanDrink(await readJson(req));
+    assertNotDuplicate(d, drink.id);
+    try {
+      q.updateDrink.run(d.name, d.brand, d.volume, d.caffeine, d.sugarFree, d.color, drink.id);
+    } catch (err) {
+      if (/UNIQUE/i.test(err.message)) throw new HttpError(409, 'duplicate');
+      throw err;
+    }
+    send(res, 200, { id: drink.id });
+  }],
+  ['DELETE', /^\/api\/drinks\/([^/]+)$/, async (req, res, idStr) => {
+    checkCsrf(req);
+    const user = requireUser(req);
+    const drink = ownDrink(user, idStr);
+    q.deleteDrink.run(drink.id); // оценки удаляются каскадом
+    await removeUpload(drink.image);
+    send(res, 200, { ok: true });
+  }],
+  ['PUT', /^\/api\/drinks\/([^/]+)\/image$/, async (req, res, idStr) => {
+    checkCsrf(req, IMAGE_TYPES);
+    const user = requireUser(req);
+    const drink = ownDrink(user, idStr);
+    const name = await replaceImage(req, drink.image, (n) => q.setDrinkImage.run(n, drink.id));
+    send(res, 200, { image: avatarUrl(name) });
+  }],
+  ['DELETE', /^\/api\/drinks\/([^/]+)\/image$/, async (req, res, idStr) => {
+    checkCsrf(req);
+    const user = requireUser(req);
+    const drink = ownDrink(user, idStr);
+    q.setDrinkImage.run(null, drink.id);
+    await removeUpload(drink.image);
+    send(res, 200, { ok: true });
+  }],
+];
 
 // ---------- Статика ----------
 
@@ -247,9 +485,14 @@ const server = createServer(async (req, res) => {
     const method = req.method === 'HEAD' ? 'GET' : req.method;
 
     if (path.startsWith('/api/')) {
-      const handler = routes[`${method} ${path}`];
-      if (!handler) throw new HttpError(Object.keys(routes).some((k) => k.endsWith(` ${path}`)) ? 405 : 404, 'not_found');
-      return await handler(req, res);
+      const exact = routes[`${method} ${path}`];
+      if (exact) return await exact(req, res);
+      for (const [m, re, fn] of paramRoutes) {
+        const hit = m === method && path.match(re);
+        if (hit) return await fn(req, res, ...hit.slice(1));
+      }
+      const known = Object.keys(routes).some((k) => k.endsWith(` ${path}`)) || paramRoutes.some(([, re]) => re.test(path));
+      throw new HttpError(known ? 405 : 404, 'not_found');
     }
 
     if (req.method !== 'GET' && req.method !== 'HEAD') throw new HttpError(405, 'method_not_allowed');
@@ -274,7 +517,11 @@ const server = createServer(async (req, res) => {
     throw new HttpError(404, 'not_found');
   } catch (err) {
     if (res.headersSent) return res.destroy();
-    if (err instanceof HttpError) return send(res, err.status, { error: err.code });
+    if (err instanceof HttpError) {
+      // Слишком большое тело: закрываем соединение, не дожидаясь остатка загрузки.
+      const close = err.status === 413 ? { Connection: 'close' } : {};
+      return send(res, err.status, { error: err.code, ...err.extra }, close);
+    }
     console.error(err);
     send(res, 500, { error: 'server_error' });
   }
