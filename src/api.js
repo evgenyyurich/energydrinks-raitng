@@ -71,10 +71,6 @@ function apiError(err) {
       return { message: 'Название обязательно, не длиннее 60 символов.', field: 'name' };
     case 'brand_invalid':
       return { message: 'Бренд обязателен, не длиннее 40 символов.', field: 'brand' };
-    case 'volume_invalid':
-      return { message: 'Объём: целое число от 50 до 2000 мл.', field: 'volume' };
-    case 'caffeine_invalid':
-      return { message: 'Кофеин: целое число от 0 до 100 мг на 100 мл.', field: 'caffeine' };
     case 'color_invalid':
       return { message: 'Выберите цвет банки из списка.' };
     case 'score_invalid':

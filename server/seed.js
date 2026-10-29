@@ -17,14 +17,14 @@ if (db.prepare('SELECT COUNT(*) AS n FROM users').get().n || db.prepare('SELECT 
 }
 
 const drinkRows = [
-  ['Red Bull', 'Red Bull', 250, 32, 0, '#1e3a8a'],
-  ['Monster Energy', 'Monster', 500, 32, 0, '#166534'],
-  ['Monster Ultra White', 'Monster', 500, 30, 1, '#9ca3af'],
-  ['Burn Original', 'Burn', 449, 32, 0, '#b91c1c'],
-  ['Adrenaline Rush', 'Adrenaline', 449, 30, 0, '#7c2d12'],
-  ['Flash Up Energy', 'Flash Up', 450, 30, 0, '#ca8a04'],
-  ['Tornado Energy', 'Tornado', 450, 30, 0, '#4c1d95'],
-  ['Gorilla', 'Gorilla', 450, 30, 0, '#111827'],
+  ['Red Bull', 'Red Bull', 0, '#1e3a8a'],
+  ['Monster Energy', 'Monster', 0, '#166534'],
+  ['Monster Ultra White', 'Monster', 1, '#9ca3af'],
+  ['Burn Original', 'Burn', 0, '#b91c1c'],
+  ['Adrenaline Rush', 'Adrenaline', 0, '#7c2d12'],
+  ['Flash Up Energy', 'Flash Up', 0, '#ca8a04'],
+  ['Tornado Energy', 'Tornado', 0, '#4c1d95'],
+  ['Gorilla', 'Gorilla', 0, '#111827'],
 ];
 const userRows = [
   ['evgen', 'Москва', 'evgen.svg'],
@@ -42,7 +42,7 @@ const ratingRows = [
 ];
 
 mkdirSync(UPLOADS_DIR, { recursive: true });
-const insDrink = db.prepare('INSERT INTO drinks (name, brand, volume, caffeine, sugar_free, color) VALUES (?,?,?,?,?,?)');
+const insDrink = db.prepare('INSERT INTO drinks (name, brand, sugar_free, color) VALUES (?,?,?,?)');
 const insUser = db.prepare('INSERT INTO users (nick, password_hash, avatar, city) VALUES (?,?,?,?)');
 const insRating = db.prepare('INSERT INTO ratings (user_id, drink_id, score, store) VALUES (?,?,?,?)');
 

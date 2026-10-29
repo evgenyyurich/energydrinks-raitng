@@ -22,7 +22,7 @@ const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
 const db = openDb();
 const q = {
-  drinks: db.prepare('SELECT id, name, brand, volume, caffeine, sugar_free, color, image, created_by FROM drinks ORDER BY id'),
+  drinks: db.prepare('SELECT id, name, brand, sugar_free, color, image, created_by FROM drinks ORDER BY id'),
   users: db.prepare('SELECT id, nick, avatar, city FROM users ORDER BY id'),
   ratings: db.prepare('SELECT user_id, drink_id, score, store FROM ratings ORDER BY id'),
   userByNick: db.prepare('SELECT id, nick, avatar, city, password_hash FROM users WHERE nick = ?'),
@@ -35,9 +35,9 @@ const q = {
   drinkById: db.prepare('SELECT id, name, brand, image, created_by FROM drinks WHERE id = ?'),
   drinkNames: db.prepare('SELECT id, name, brand FROM drinks'),
   insertDrink: db.prepare(
-    'INSERT INTO drinks (name, brand, volume, caffeine, sugar_free, color, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO drinks (name, brand, sugar_free, color, created_by) VALUES (?, ?, ?, ?, ?)',
   ),
-  updateDrink: db.prepare('UPDATE drinks SET name = ?, brand = ?, volume = ?, caffeine = ?, sugar_free = ?, color = ? WHERE id = ?'),
+  updateDrink: db.prepare('UPDATE drinks SET name = ?, brand = ?, sugar_free = ?, color = ? WHERE id = ?'),
   setDrinkImage: db.prepare('UPDATE drinks SET image = ? WHERE id = ?'),
   deleteDrink: db.prepare('DELETE FROM drinks WHERE id = ?'),
   upsertRating: db.prepare(
@@ -203,8 +203,6 @@ function cleanDrink(body) {
   return {
     name: cleanStr(body.name, { max: 60, required: true, code: 'name_invalid' }),
     brand: cleanStr(body.brand, { max: 40, required: true, code: 'brand_invalid' }),
-    volume: cleanInt(body.volume, 50, 2000, 'volume_invalid'),
-    caffeine: cleanInt(body.caffeine, 0, 100, 'caffeine_invalid'),
     sugarFree: body.sugarFree ? 1 : 0,
     color: color.toLowerCase(),
   };
@@ -291,7 +289,7 @@ const routes = {
   'GET /api/data': (req, res) => {
     send(res, 200, {
       drinks: q.drinks.all().map((d) => ({
-        id: d.id, name: d.name, brand: d.brand, volume: d.volume, caffeine: d.caffeine,
+        id: d.id, name: d.name, brand: d.brand,
         sugarFree: !!d.sugar_free, color: d.color, image: avatarUrl(d.image), createdBy: d.created_by,
       })),
       users: q.users.all().map(publicUser),
@@ -342,7 +340,7 @@ const routes = {
     assertNotDuplicate(d);
     let id;
     try {
-      id = Number(q.insertDrink.run(d.name, d.brand, d.volume, d.caffeine, d.sugarFree, d.color, user.id).lastInsertRowid);
+      id = Number(q.insertDrink.run(d.name, d.brand, d.sugarFree, d.color, user.id).lastInsertRowid);
     } catch (err) {
       if (/UNIQUE/i.test(err.message)) throw new HttpError(409, 'duplicate');
       throw err;
@@ -407,7 +405,7 @@ const paramRoutes = [
     const d = cleanDrink(await readJson(req));
     assertNotDuplicate(d, drink.id);
     try {
-      q.updateDrink.run(d.name, d.brand, d.volume, d.caffeine, d.sugarFree, d.color, drink.id);
+      q.updateDrink.run(d.name, d.brand, d.sugarFree, d.color, drink.id);
     } catch (err) {
       if (/UNIQUE/i.test(err.message)) throw new HttpError(409, 'duplicate');
       throw err;

@@ -16,7 +16,7 @@
 
 * { box-sizing: border-box; }
 
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; scrollbar-gutter: stable; }
 
 body {
   margin: 0;
@@ -74,6 +74,23 @@ body {
 .btn--sm { padding: 0 12px; }
 a.btn { display: inline-grid; place-items: center; text-decoration: none; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Нижняя панель действия (зона большого пальца) */
+.action-spacer { height: calc(48px + 32px + env(safe-area-inset-bottom)); }
+.action-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9;
+  padding: 24px 0 calc(12px + env(safe-area-inset-bottom));
+  background: linear-gradient(to bottom, rgba(15, 17, 21, 0) 0%, rgba(15, 17, 21, 0.9) 45%);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+.action-bar__inner { max-width: 880px; margin: 0 auto; padding: 0 16px; }
+.action-bar__btn { display: grid; width: 100%; min-height: 48px; pointer-events: auto; }
 
 /* Аккаунт в шапке */
 .topbar__inner { gap: 12px; }

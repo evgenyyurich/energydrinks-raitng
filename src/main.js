@@ -77,7 +77,6 @@ const drinkSorts = {
   rating: (a, b) => (b.avg ?? -1) - (a.avg ?? -1),
   votes: (a, b) => b.votes - a.votes,
   name: (a, b) => a.name.localeCompare(b.name, 'ru'),
-  caffeine: (a, b) => b.caffeine - a.caffeine,
 };
 
 const drinkFilter = { q: '', sort: 'rating' };
@@ -88,18 +87,22 @@ function renderDrinks() {
       <h1>Рейтинг энергетиков</h1>
       <p class="muted">Средний балл по оценкам всех участников.</p>
     </section>
-    ${currentUser() ? '<a class="btn btn--primary btn--block" href="#/add">+ Добавить энергетик</a>' : ''}
     <section class="controls">
       <input id="search" class="input" type="search" placeholder="Поиск по названию или бренду" autocomplete="off" />
       <select id="sort" class="input">
         <option value="rating">По рейтингу</option>
         <option value="votes">По числу оценок</option>
         <option value="name">По названию</option>
-        <option value="caffeine">По кофеину</option>
       </select>
     </section>
     <ol id="list" class="list"></ol>
-    <p id="empty" class="muted empty" hidden>Ничего не нашлось.</p>`;
+    <p id="empty" class="muted empty" hidden>Ничего не нашлось.</p>
+    ${
+      currentUser()
+        ? `<div class="action-spacer" aria-hidden="true"></div>
+    <div class="action-bar"><div class="action-bar__inner"><a class="btn btn--primary action-bar__btn" href="#/add">+ Добавить энергетик</a></div></div>`
+        : ''
+    }`;
 
   const search = document.getElementById('search');
   const sort = document.getElementById('sort');
@@ -128,8 +131,6 @@ function renderDrinks() {
             <h2 class="card__name">${escape(d.name)}</h2>
             <p class="card__meta">
               <span>${escape(d.brand)}</span>
-              <span>${d.volume} мл</span>
-              <span>${d.caffeine} мг/100 мл</span>
               ${d.sugarFree ? '<span class="tag">без сахара</span>' : ''}
             </p>
           </div>
@@ -306,11 +307,7 @@ function renderDrink(id) {
       <div class="drink__info">
         <h1 class="drink__name">${escape(drink.name)}</h1>
         <p class="muted drink__brand">${escape(drink.brand)}</p>
-        <p class="card__meta">
-          <span>${drink.volume} мл</span>
-          <span>${drink.caffeine} мг/100 мл</span>
-          ${drink.sugarFree ? '<span class="tag">без сахара</span>' : ''}
-        </p>
+        ${drink.sugarFree ? '<p class="card__meta"><span class="tag">без сахара</span></p>' : ''}
       </div>
       ${scoreBox(drink.avg, votesLabel(drink.votes))}
     </section>
@@ -478,8 +475,6 @@ function renderDrinkForm(drink) {
         <input id="brand" name="brand" class="input" type="text" autocomplete="off" maxlength="40" required list="brands" value="${escape(drink?.brand ?? '')}" />
         <datalist id="brands">${brands.map((b) => `<option value="${escape(b)}"></option>`).join('')}</datalist>
       </div>
-      ${field({ id: 'volume', label: 'Объём, мл', type: 'number', autocomplete: 'off', hint: 'От 50 до 2000', extra: `inputmode="numeric" min="50" max="2000" step="1" required value="${drink?.volume ?? ''}"` })}
-      ${field({ id: 'caffeine', label: 'Кофеин, мг на 100 мл', type: 'number', autocomplete: 'off', hint: 'От 0 до 100', extra: `inputmode="numeric" min="0" max="100" step="1" required value="${drink?.caffeine ?? ''}"` })}
       <label class="check">
         <input type="checkbox" name="sugarFree" ${drink?.sugarFree ? 'checked' : ''} />
         <span>Без сахара</span>
@@ -536,8 +531,6 @@ function renderDrinkForm(drink) {
     const body = {
       name: String(data.get('name')).trim(),
       brand: String(data.get('brand')).trim(),
-      volume: Number(data.get('volume')),
-      caffeine: Number(data.get('caffeine')),
       sugarFree: data.has('sugarFree'),
       color: String(data.get('color')),
     };
@@ -547,10 +540,6 @@ function renderDrinkForm(drink) {
     };
     if (!body.name || body.name.length > 60) return bad('Название обязательно, не длиннее 60 символов.', 'name');
     if (!body.brand || body.brand.length > 40) return bad('Бренд обязателен, не длиннее 40 символов.', 'brand');
-    if (!Number.isInteger(body.volume) || body.volume < 50 || body.volume > 2000)
-      return bad('Объём: целое число от 50 до 2000 мл.', 'volume');
-    if (!Number.isInteger(body.caffeine) || body.caffeine < 0 || body.caffeine > 100)
-      return bad('Кофеин: целое число от 0 до 100 мг на 100 мл.', 'caffeine');
 
     await busy(form, async () => {
       try {
