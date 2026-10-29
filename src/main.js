@@ -1,6 +1,7 @@
-import { loadData } from './api.js';
+import { loadData, currentUser, onAuthChange, login, register, logout } from './api.js';
 
 const app = document.getElementById('app');
+const account = document.getElementById('account');
 const tabs = document.querySelectorAll('.tabs__item');
 
 // Данные приходят из PocketBase один раз при старте.
@@ -218,16 +219,119 @@ function renderProfile(nick) {
     }`;
 }
 
+// ---------- Шапка и авторизация ----------
+
+// Кнопка «Войти» или аватар + ник + «Выйти» — по текущей сессии.
+function renderAccount() {
+  const me = currentUser();
+  account.innerHTML = me
+    ? `<a class="account__me" href="#/u/${encodeURIComponent(me.nick)}">
+         ${avatar(me)}<span class="account__nick">${escape(me.nick)}</span>
+       </a>
+       <button class="btn btn--ghost btn--sm" type="button" id="logout">Выйти</button>`
+    : '<a class="btn btn--ghost" href="#/login">Войти</a>';
+}
+
+// Куда вернуться после входа: последняя страница, не относящаяся к входу/регистрации.
+let returnTo = '#/';
+
+// Поле формы: подпись над input, 16px и высоту 44px задаёт .input.
+const field = ({ id, label, type = 'text', autocomplete, hint = '', extra = '' }) => `
+  <div class="field">
+    <label class="field__label" for="${id}">${label}</label>
+    <input id="${id}" name="${id}" class="input" type="${type}" autocomplete="${autocomplete}" ${extra} />
+    ${hint ? `<small class="field__hint muted">${hint}</small>` : ''}
+  </div>`;
+
+// Общая логика формы: блокируем кнопку на время отправки, показываем ошибку.
+function bindForm(onSubmit) {
+  const form = document.getElementById('auth-form');
+  const error = document.getElementById('auth-error');
+  const submit = form.querySelector('button[type="submit"]');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    error.hidden = true;
+    submit.disabled = true;
+    try {
+      await onSubmit(Object.fromEntries(new FormData(form)));
+    } catch (err) {
+      error.textContent = err.message || 'Что-то пошло не так. Попробуйте ещё раз.';
+      error.hidden = false;
+      if (err.field) form.elements[err.field]?.focus();
+      submit.disabled = false;
+    }
+  });
+}
+
+function renderLogin() {
+  app.innerHTML = `
+    <section class="hero"><h1>Вход</h1></section>
+    <form id="auth-form" class="form" novalidate>
+      ${field({ id: 'nick', label: 'Ник', autocomplete: 'username', extra: 'autocapitalize="none" spellcheck="false"' })}
+      ${field({ id: 'password', label: 'Пароль', type: 'password', autocomplete: 'current-password' })}
+      <p id="auth-error" class="form__error" role="alert" hidden></p>
+      <button class="btn btn--primary" type="submit">Войти</button>
+    </form>
+    <p class="muted form__alt">Ещё нет аккаунта? <a class="link" href="#/register">Зарегистрироваться</a></p>`;
+
+  bindForm(async ({ nick, password }) => {
+    if (!nick.trim() || !password) throw { message: 'Введите ник и пароль.' };
+    await login(nick.trim(), password);
+    location.hash = returnTo;
+  });
+}
+
+function renderRegister() {
+  app.innerHTML = `
+    <section class="hero"><h1>Регистрация</h1></section>
+    <form id="auth-form" class="form" novalidate>
+      ${field({ id: 'nick', label: 'Ник', autocomplete: 'username', hint: '3–24 символа: латинские буквы, цифры и _', extra: 'autocapitalize="none" spellcheck="false" maxlength="24"' })}
+      ${field({ id: 'password', label: 'Пароль', type: 'password', autocomplete: 'new-password', hint: 'Минимум 8 символов' })}
+      ${field({ id: 'password2', label: 'Повторите пароль', type: 'password', autocomplete: 'new-password' })}
+      <p id="auth-error" class="form__error" role="alert" hidden></p>
+      <button class="btn btn--primary" type="submit">Зарегистрироваться</button>
+    </form>
+    <p class="muted form__alt">Уже есть аккаунт? <a class="link" href="#/login">Войти</a></p>`;
+
+  bindForm(async ({ nick, password, password2 }) => {
+    nick = nick.trim();
+    if (!/^[A-Za-z0-9_]{3,24}$/.test(nick))
+      throw { message: 'Ник: 3–24 символа, только латинские буквы, цифры и _.', field: 'nick' };
+    if (password.length < 8)
+      throw { message: 'Пароль слишком короткий: нужно минимум 8 символов.', field: 'password' };
+    if (password !== password2) throw { message: 'Пароли не совпадают.', field: 'password2' };
+
+    await register(nick, password);
+    // Новый участник должен появиться в списке людей.
+    try {
+      ({ drinks, users, ratings } = await loadData());
+    } catch (err) {
+      console.error(err);
+    }
+    location.hash = `#/u/${encodeURIComponent(nick)}`;
+  });
+}
+
 // ---------- Маршруты ----------
 
 function route() {
   const hash = location.hash.replace(/^#/, '') || '/';
   const profile = hash.match(/^\/u\/(.+)$/);
-  const tab = hash === '/people' || profile ? 'people' : 'drinks';
+  const isAuthPage = hash === '/login' || hash === '/register';
+  const tab = hash === '/people' || profile ? 'people' : isAuthPage ? null : 'drinks';
 
   tabs.forEach((t) => t.classList.toggle('tabs__item--active', t.dataset.tab === tab));
+  if (!isAuthPage) returnTo = location.hash || '#/';
 
-  if (profile) renderProfile(decodeURIComponent(profile[1]));
+  // Вошедшему незачем видеть формы входа и регистрации.
+  if (isAuthPage && currentUser()) {
+    location.replace(returnTo);
+    return;
+  }
+
+  if (hash === '/login') renderLogin();
+  else if (hash === '/register') renderRegister();
+  else if (profile) renderProfile(decodeURIComponent(profile[1]));
   else if (hash === '/people') renderPeople();
   else renderDrinks();
 
@@ -248,6 +352,12 @@ async function start() {
     return;
   }
   window.addEventListener('hashchange', route);
+  // Шапка обновляется при входе/выходе без перезагрузки страницы.
+  onAuthChange(renderAccount);
+  account.addEventListener('click', (e) => {
+    if (e.target.closest('#logout')) logout();
+  });
+  renderAccount();
   route();
 }
 
