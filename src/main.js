@@ -1,7 +1,12 @@
-import { drinks, users, ratings } from './data.js';
+import { loadData } from './api.js';
 
 const app = document.getElementById('app');
 const tabs = document.querySelectorAll('.tabs__item');
+
+// Данные приходят из PocketBase один раз при старте.
+let drinks = [];
+let users = [];
+let ratings = [];
 
 // ---------- Помощники ----------
 
@@ -229,5 +234,21 @@ function route() {
   window.scrollTo(0, 0);
 }
 
-window.addEventListener('hashchange', route);
-route();
+async function start() {
+  app.innerHTML = '<p class="muted empty">Загрузка…</p>';
+  try {
+    ({ drinks, users, ratings } = await loadData());
+  } catch (err) {
+    console.error(err);
+    app.innerHTML = `
+      <section class="hero">
+        <h1>Не удалось загрузить данные</h1>
+        <p class="muted">Сервер сейчас недоступен. Попробуйте обновить страницу чуть позже.</p>
+      </section>`;
+    return;
+  }
+  window.addEventListener('hashchange', route);
+  route();
+}
+
+start();

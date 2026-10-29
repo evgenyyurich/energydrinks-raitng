@@ -6,9 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "pb": "pocketbase\\pocketbase.exe serve --dir pocketbase/pb_data --migrationsDir pocketbase/pb_migrations --http 127.0.0.1:8090"
   },
   "devDependencies": {
     "vite": "^6.4.5"
+  },
+  "dependencies": {
+    "pocketbase": "^0.28.1"
   }
 }
