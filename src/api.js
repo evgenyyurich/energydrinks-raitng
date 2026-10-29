@@ -139,8 +139,10 @@ async function write(method, path, body) {
   }
 }
 
-export const rate = (drinkId, score, store, price) => write('PUT', `/api/ratings/${drinkId}`, { score, store, price });
-export const unrate = (drinkId) => write('DELETE', `/api/ratings/${drinkId}`);
+// userId — только для администратора: оценка от имени другого участника (без него — своя).
+const ratingPath = (drinkId, userId) => (userId ? `/api/users/${userId}/ratings/${drinkId}` : `/api/ratings/${drinkId}`);
+export const rate = (drinkId, score, store, price, userId) => write('PUT', ratingPath(drinkId, userId), { score, store, price });
+export const unrate = (drinkId, userId) => write('DELETE', ratingPath(drinkId, userId));
 
 export const createDrink = (drink) => write('POST', '/api/drinks', drink);
 export const updateDrink = (id, drink) => write('PATCH', `/api/drinks/${id}`, drink);
@@ -150,14 +152,16 @@ export const deleteDrinkImage = (id) => write('DELETE', `/api/drinks/${id}/image
 
 // Сервер отвечает name_invalid и на плохое имя участника, и на плохое название энергетика —
 // для профиля подменяем код, чтобы показать нужное сообщение.
-export const updateProfile = async (name, city) => {
+// userId — только для администратора: правка чужого профиля (без него — свой).
+const profilePath = (userId) => (userId ? `/api/users/${userId}` : '/api/me');
+export const updateProfile = async (name, city, userId) => {
   try {
-    return await request('PATCH', '/api/me', { name, city });
+    return await request('PATCH', profilePath(userId), { name, city });
   } catch (err) {
     console.error(err);
     if (err.code === 'name_invalid') err.code = 'user_name_invalid';
     throw apiError(err);
   }
 };
-export const uploadAvatar = (blob) => write('PUT', '/api/me/avatar', blob);
-export const deleteAvatar = () => write('DELETE', '/api/me/avatar');
+export const uploadAvatar = (blob, userId) => write('PUT', `${profilePath(userId)}/avatar`, blob);
+export const deleteAvatar = (userId) => write('DELETE', `${profilePath(userId)}/avatar`);

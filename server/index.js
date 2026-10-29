@@ -177,6 +177,20 @@ function requireUser(req) {
   return user;
 }
 
+// Админские маршруты: 403 для не-админа.
+function requireAdmin(req) {
+  const user = requireUser(req);
+  if (!user.is_admin) throw new HttpError(403, 'forbidden');
+  return user;
+}
+
+// Пользователь из пути /api/users/:id/...
+function userOf(idStr) {
+  const user = q.userById.get(idParam(idStr));
+  if (!user) throw new HttpError(404, 'not_found');
+  return user;
+}
+
 // ---------- Проверка входных данных ----------
 
 // Строка: обрезаем пробелы по краям, без управляющих символов; пустая необязательная -> null.
@@ -217,6 +231,16 @@ function cleanDrink(body) {
     brand: cleanStr(body.brand, { max: 40, required: true, code: 'brand_invalid' }),
     sugarFree: body.sugarFree ? 1 : 0,
     color: color.toLowerCase(),
+  };
+}
+
+// Оценка из тела запроса: балл 1–10, магазин, цена в целых рублях (null или отсутствие поля = «цена не указана»,
+// при обновлении старая цена сбрасывается).
+function cleanRating(body) {
+  return {
+    score: cleanInt(body.score, 1, 10, 'score_invalid'),
+    store: cleanStr(body.store, { max: 100, code: 'store_invalid' }),
+    price: body.price === undefined || body.price === null ? null : cleanInt(body.price, 1, 5000, 'price_invalid'),
   };
 }
 
@@ -297,6 +321,15 @@ async function replaceImage(req, oldName, save) {
 
 const NICK_RE = /^[A-Za-z0-9_]{3,24}$/;
 
+// Имя и город из тела запроса; поле, которого нет в запросе, не меняется.
+async function updateProfile(req, userId) {
+  const body = await readJson(req);
+  const cur = q.userById.get(userId);
+  const name = 'name' in body ? cleanName(body.name) : cur.name;
+  const city = 'city' in body ? cleanStr(body.city, { max: 60, code: 'city_invalid' }) : cur.city;
+  q.setProfile.run(name, city, userId);
+}
+
 const routes = {
   'GET /api/data': (req, res) => {
     send(res, 200, {
@@ -364,12 +397,7 @@ const routes = {
   'PATCH /api/me': async (req, res) => {
     checkCsrf(req);
     const user = requireUser(req);
-    const body = await readJson(req);
-    const cur = q.userById.get(user.id);
-    // Поле, которого нет в запросе, не меняется.
-    const name = 'name' in body ? cleanName(body.name) : cur.name;
-    const city = 'city' in body ? cleanStr(body.city, { max: 60, code: 'city_invalid' }) : cur.city;
-    q.setProfile.run(name, city, user.id);
+    await updateProfile(req, user.id);
     send(res, 200, { user: selfUser(q.userById.get(user.id)) });
   },
 
@@ -398,15 +426,50 @@ const routes = {
 
 // Маршруты с параметром: [метод, шаблон, обработчик(req, res, ...группы)]. Id проверяет idParam (только цифры).
 const paramRoutes = [
+  ['PATCH', /^\/api\/users\/([^/]+)$/, async (req, res, idStr) => {
+    checkCsrf(req);
+    requireAdmin(req);
+    const target = userOf(idStr);
+    await updateProfile(req, target.id);
+    send(res, 200, { user: publicUser(q.userById.get(target.id)) });
+  }],
+  ['PUT', /^\/api\/users\/([^/]+)\/avatar$/, async (req, res, idStr) => {
+    checkCsrf(req, IMAGE_TYPES);
+    requireAdmin(req);
+    const target = userOf(idStr);
+    const name = await replaceImage(req, target.avatar, (n) => q.setAvatar.run(n, target.id));
+    send(res, 200, { avatar: avatarUrl(name) });
+  }],
+  ['DELETE', /^\/api\/users\/([^/]+)\/avatar$/, async (req, res, idStr) => {
+    checkCsrf(req);
+    requireAdmin(req);
+    const target = userOf(idStr);
+    q.setAvatar.run(null, target.id);
+    await removeUpload(target.avatar);
+    send(res, 200, { ok: true });
+  }],
+  ['PUT', /^\/api\/users\/([^/]+)\/ratings\/([^/]+)$/, async (req, res, userIdStr, drinkIdStr) => {
+    checkCsrf(req);
+    requireAdmin(req);
+    const target = userOf(userIdStr);
+    const drink = drinkOf(drinkIdStr);
+    const { score, store, price } = cleanRating(await readJson(req));
+    q.upsertRating.run(target.id, drink.id, score, store, price);
+    send(res, 200, { ok: true });
+  }],
+  ['DELETE', /^\/api\/users\/([^/]+)\/ratings\/([^/]+)$/, async (req, res, userIdStr, drinkIdStr) => {
+    checkCsrf(req);
+    requireAdmin(req);
+    const target = userOf(userIdStr);
+    q.deleteRating.run(target.id, drinkOf(drinkIdStr).id);
+    send(res, 200, { ok: true });
+  }],
   ['PUT', /^\/api\/ratings\/([^/]+)$/, async (req, res, idStr) => {
     checkCsrf(req);
     const user = requireUser(req);
     const drink = drinkOf(idStr);
     const body = await readJson(req);
-    const score = cleanInt(body.score, 1, 10, 'score_invalid');
-    const store = cleanStr(body.store, { max: 100, code: 'store_invalid' });
-    // Цена в целых рублях; null или отсутствие поля = «цена не указана» (при обновлении старая цена сбрасывается).
-    const price = body.price === undefined || body.price === null ? null : cleanInt(body.price, 1, 5000, 'price_invalid');
+    const { score, store, price } = cleanRating(body);
     q.upsertRating.run(user.id, drink.id, score, store, price);
     send(res, 200, { ok: true });
   }],

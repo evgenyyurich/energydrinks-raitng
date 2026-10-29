@@ -252,6 +252,7 @@ function renderProfile(nick) {
 
   app.innerHTML = `
     <a class="link back" href="#/people">← Все участники</a>
+    ${takeAdminNotice()}
     <section class="profile">
       ${avatar(user).replace('avatar', 'avatar avatar--lg')}
       <div>
@@ -261,7 +262,13 @@ function renderProfile(nick) {
         <p class="muted profile__stats">
           ${votesLabel(own.length)} · средняя ${avg === null ? '—' : avg.toFixed(1)}
         </p>
-        ${currentUser()?.id === user.id ? '<a class="btn btn--ghost btn--sm profile__edit" href="#/me">Редактировать</a>' : ''}
+        ${
+          currentUser()?.id === user.id
+            ? '<a class="btn btn--ghost btn--sm profile__edit" href="#/me">Редактировать</a>'
+            : currentUser()?.isAdmin
+              ? `<a class="btn btn--ghost btn--sm profile__edit" href="#/u/${encodeURIComponent(user.nick)}/edit">Редактировать</a>`
+              : ''
+        }
       </div>
     </section>
     ${
@@ -280,12 +287,14 @@ function renderProfile(nick) {
                   </div>
                   ${scoreBox(r.score, 'оценка')}
                  </a>
+                 ${ratingAdminHtml(r)}
                 </li>`;
               })
               .join('')}
           </ol>`
         : '<p class="muted empty">Пока ничего не оценил.</p>'
     }`;
+  bindRatingAdmin();
 }
 
 // ---------- Общие куски форм ----------
@@ -328,6 +337,224 @@ async function reload() {
 const uniqueStores = () => [...new Set(ratings.map((r) => r.store).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru'));
 
 const bigCan = (drink) => `<span class="drink__can" style="--can:${escape(drink.color || '#1e3a8a')}" aria-hidden="true"></span>`;
+
+// Форма оценки (ползунок, магазин, цена). p — префикс id: у формы в окне администратора он свой, чтобы id не совпали
+// с «Моей оценкой». actions — дополнительные кнопки рядом с «Сохранить».
+function rateFormHtml(cur, p, { actions = '' } = {}) {
+  return `<form id="${p}rate-form" class="form" novalidate>
+         <div class="field slider ${cur ? '' : 'slider--unset'}">
+           <label class="field__label" for="${p}score">Оценка от 1 до 10</label>
+           <div class="rate__head">
+             <p class="slider__value ${cur ? scoreClass(cur.score) : 'score--none'}" id="${p}score-value" aria-hidden="true">${
+               cur ? `<strong>${cur.score}</strong> / 10` : '<strong>—</strong> / 10'
+             }</p>
+             <p class="rate__status" id="${p}rate-status" data-state="${cur ? 'saved' : 'none'}">${cur ? 'Сохранено' : 'Оценка не выбрана'}</p>
+           </div>
+           <input id="${p}score" name="score" class="slider__input" type="range" min="1" max="10" step="1" value="${cur?.score ?? 5}" ${cur ? '' : 'aria-valuetext="не выбрана"'} />
+           <div class="slider__ticks" aria-hidden="true">${Array.from({ length: 10 }, (_, i) => `<span data-v="${i + 1}" style="--i:${i}"${cur && cur.score === i + 1 ? ' class="is-active"' : ''}>${i + 1}</span>`).join('')}</div>
+         </div>
+         <div class="field">
+           <label class="field__label" for="${p}store">Где куплен</label>
+           <input id="${p}store" name="store" class="input" type="text" maxlength="100" list="${p}stores" autocomplete="off" aria-describedby="${p}store-hint" value="${escape(cur?.store ?? '')}" />
+           <span class="field__hint muted" id="${p}store-hint">необязательно</span>
+           <datalist id="${p}stores">${uniqueStores().map((s) => `<option value="${escape(s)}"></option>`).join('')}</datalist>
+         </div>
+         <div class="field">
+           <label class="field__label" for="${p}price">Цена, ₽</label>
+           <input id="${p}price" name="price" class="input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" aria-describedby="${p}price-hint ${p}price-error" value="${cur?.price ?? ''}" />
+           <span class="field__hint muted" id="${p}price-hint">необязательно</span>
+           <p class="field__error" id="${p}price-error" hidden></p>
+         </div>
+         <p id="${p}rate-error" class="form__error" role="alert" hidden></p>
+         <div class="actions">
+           <button class="btn btn--primary" type="submit" id="${p}rate-submit">${cur ? 'Обновить оценку' : 'Сохранить оценку'}</button>
+           ${actions}
+         </div>
+       </form>`;
+}
+
+// Логика формы оценки: ползунок, статус, проверка цены. save(score, store, price) вызывается при отправке;
+// ошибки save показываются в форме.
+function mountRateForm(p, cur, save) {
+  const el = (name) => document.getElementById(p + name);
+  const form = el('rate-form');
+  const error = el('rate-error');
+  const slider = el('score');
+  const shown = el('score-value');
+  const statusEl = el('rate-status');
+  const storeEl = el('store');
+  const priceEl = el('price');
+  const priceError = el('price-error');
+  const saveBtn = el('rate-submit');
+  let chosen = !!cur;
+  saveBtn.disabled = !chosen;
+  // Оценка «выбрана», только когда пользователь тронул ползунок: случайное значение по умолчанию не сохраняем.
+  const sliderBox = form.querySelector('.slider');
+  const ticks = sliderBox.querySelectorAll('.slider__ticks span');
+  // Заливка и цвет бегунка: --fill в процентах, --hue плавно идёт от красного (1) к зелёному (10).
+  const paint = (v) => {
+    const pct = ((v - 1) / 9) * 100;
+    sliderBox.style.setProperty('--fill', `${pct}%`);
+    sliderBox.style.setProperty('--fill-n', pct);
+    sliderBox.style.setProperty('--tone', `var(--${v >= 8 ? 'high' : v >= 6 ? 'mid' : 'low'})`);
+    sliderBox.style.setProperty('--hue', Math.round(((v - 1) / 9) * 125));
+  };
+  paint(Number(slider.value));
+  // Статус: «Сохранено» / «Не сохранено» / «Есть несохранённые изменения» / «Оценка не выбрана» — без перерисовки страницы.
+  const refreshStatus = () => {
+    const changed =
+      !!cur &&
+      (Number(slider.value) !== cur.score ||
+        storeEl.value.trim() !== (cur.store ?? '') ||
+        priceEl.value.trim() !== String(cur.price ?? ''));
+    const state = cur ? (changed ? 'dirty' : 'saved') : chosen ? 'dirty' : 'none';
+    statusEl.dataset.state = state;
+    statusEl.textContent = state === 'saved' ? 'Сохранено' : state === 'none' ? 'Оценка не выбрана' : cur ? 'Есть несохранённые изменения' : 'Не сохранено';
+  };
+  const choose = () => {
+    const v = Number(slider.value);
+    chosen = true;
+    saveBtn.disabled = false;
+    sliderBox.classList.remove('slider--unset');
+    paint(v);
+    ticks.forEach((t) => t.classList.toggle('is-active', Number(t.dataset.v) === v));
+    shown.className = `slider__value ${scoreClass(v)}`;
+    shown.innerHTML = `<strong>${v}</strong> / 10`;
+    slider.setAttribute('aria-valuetext', `${v} из 10`);
+    refreshStatus();
+  };
+  ticks.forEach((t) =>
+    t.addEventListener('click', () => {
+      slider.value = t.dataset.v;
+      choose();
+    }),
+  );
+  slider.addEventListener('input', choose);
+  slider.addEventListener('change', choose);
+  slider.addEventListener('pointerdown', choose);
+  slider.addEventListener('keydown', (e) => {
+    if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End') setTimeout(choose);
+  });
+  storeEl.addEventListener('input', refreshStatus);
+  priceEl.addEventListener('input', () => {
+    priceError.hidden = true;
+    priceEl.removeAttribute('aria-invalid');
+    refreshStatus();
+  });
+  if (cur) slider.setAttribute('aria-valuetext', `${cur.score} из 10`);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    error.hidden = true;
+    priceError.hidden = true;
+    priceEl.removeAttribute('aria-invalid');
+    const data = new FormData(form);
+    const score = Number(data.get('score'));
+    if (!chosen || !score) return showError(error, { message: 'Выберите оценку от 1 до 10.' });
+    const priceRaw = String(data.get('price') || '').trim();
+    let price = null;
+    if (priceRaw) {
+      price = /^[0-9]{1,4}$/.test(priceRaw) ? Number(priceRaw) : NaN;
+      if (!(price >= 1 && price <= 5000)) {
+        priceError.textContent = 'Цена — целое число рублей от 1 до 5000.';
+        priceError.hidden = false;
+        priceEl.setAttribute('aria-invalid', 'true');
+        priceEl.focus();
+        return;
+      }
+    }
+    saveBtn.setAttribute('aria-busy', 'true');
+    await busy(form, async () => {
+      try {
+        await save(score, String(data.get('store') || '').trim(), price);
+      } catch (err) {
+        showError(error, err);
+      }
+    });
+    saveBtn.removeAttribute('aria-busy');
+  });
+}
+
+// ---------- Администратор: чужие оценки ----------
+
+// Одноразовое сообщение о действии администратора над оценкой (показывается над списком оценок).
+let adminNotice = '';
+const takeAdminNotice = () => {
+  const n = adminNotice;
+  adminNotice = '';
+  return n ? `<p class="form__ok" role="status">${escape(n)}</p>` : '';
+};
+
+// Кнопки «Изменить» / «Удалить» у чужой оценки — только для администратора.
+const ratingAdminHtml = (r) =>
+  currentUser()?.isAdmin && r.userId !== currentUser().id
+    ? `<div class="card__admin">
+         <button type="button" class="btn btn--ghost btn--sm" data-rating-edit data-user="${r.userId}" data-drink="${r.drinkId}">Изменить</button>
+         <button type="button" class="btn btn--ghost btn--sm btn--danger" data-rating-delete data-user="${r.userId}" data-drink="${r.drinkId}">Удалить</button>
+       </div>`
+    : '';
+
+// Нативный <dialog> поверх страницы; закрывается по подложке, Esc и кнопкам, после закрытия убирается из DOM.
+function openDialog(html) {
+  const dialog = document.createElement('dialog');
+  dialog.className = 'confirm';
+  dialog.innerHTML = html;
+  dialog.addEventListener('close', () => dialog.remove());
+  dialog.addEventListener('click', (e) => {
+    if (e.target === dialog) dialog.close();
+  });
+  app.append(dialog);
+  dialog.showModal();
+  return dialog;
+}
+
+const ratingTitle = (userId, drinkId) =>
+  `«${escape(drinks.find((d) => d.id === drinkId)?.name ?? '')}» — ${displayName(users.find((u) => u.id === userId) ?? { nick: '' })}`;
+
+function openRatingEditor(userId, drinkId) {
+  const cur = ratings.find((r) => r.userId === userId && r.drinkId === drinkId);
+  if (!cur) return;
+  const dialog = openDialog(`
+    <h2 class="confirm__title">Изменить оценку</h2>
+    <p class="confirm__text muted">${ratingTitle(userId, drinkId)}</p>
+    ${rateFormHtml(cur, 'adm-', { actions: '<button class="btn btn--ghost" type="button" id="adm-cancel">Отмена</button>' })}`);
+  document.getElementById('adm-cancel').addEventListener('click', () => dialog.close());
+  mountRateForm('adm-', cur, async (score, store, price) => {
+    await rate(drinkId, score, store, price, userId);
+    adminNotice = 'Оценка участника изменена.';
+    await reload();
+  });
+}
+
+function confirmRatingDelete(userId, drinkId) {
+  const dialog = openDialog(`
+    <h2 class="confirm__title">Удалить оценку?</h2>
+    <p class="confirm__text muted">${ratingTitle(userId, drinkId)}. Это нельзя отменить.</p>
+    <p id="adm-del-error" class="form__error" role="alert" hidden></p>
+    <div class="actions">
+      <button class="btn btn--ghost" type="button" id="adm-del-cancel" autofocus>Отмена</button>
+      <button class="btn btn--danger" type="button" id="adm-del-confirm">Удалить</button>
+    </div>`);
+  const err = document.getElementById('adm-del-error');
+  document.getElementById('adm-del-cancel').addEventListener('click', () => dialog.close());
+  document.getElementById('adm-del-confirm').addEventListener('click', () =>
+    busy(dialog, async () => {
+      err.hidden = true;
+      try {
+        await unrate(drinkId, userId);
+        adminNotice = 'Оценка участника удалена.';
+        await reload();
+      } catch (e) {
+        showError(err, e);
+      }
+    }),
+  );
+}
+
+function bindRatingAdmin() {
+  const ids = (b) => [Number(b.dataset.user), Number(b.dataset.drink)];
+  app.querySelectorAll('[data-rating-edit]').forEach((b) => b.addEventListener('click', () => openRatingEditor(...ids(b))));
+  app.querySelectorAll('[data-rating-delete]').forEach((b) => b.addEventListener('click', () => confirmRatingDelete(...ids(b))));
+}
 
 function renderDrink(id) {
   const drink = drinkStats().find((d) => d.id === id);
@@ -403,36 +630,9 @@ function renderDrink(id) {
         ${takeNotice()}
         ${
           me
-            ? `<form id="rate-form" class="form" novalidate>
-                 <div class="field slider ${mine ? '' : 'slider--unset'}">
-                   <label class="field__label" for="score">Оценка от 1 до 10</label>
-                   <div class="rate__head">
-                     <p class="slider__value ${mine ? scoreClass(mine.score) : 'score--none'}" id="score-value" aria-hidden="true">${
-                       mine ? `<strong>${mine.score}</strong> / 10` : '<strong>—</strong> / 10'
-                     }</p>
-                     <p class="rate__status" id="rate-status" data-state="${mine ? 'saved' : 'none'}">${mine ? 'Сохранено' : 'Оценка не выбрана'}</p>
-                   </div>
-                   <input id="score" name="score" class="slider__input" type="range" min="1" max="10" step="1" value="${mine?.score ?? 5}" ${mine ? '' : 'aria-valuetext="не выбрана"'} />
-                   <div class="slider__ticks" aria-hidden="true">${Array.from({ length: 10 }, (_, i) => `<span data-v="${i + 1}" style="--i:${i}"${mine && mine.score === i + 1 ? ' class="is-active"' : ''}>${i + 1}</span>`).join('')}</div>
-                 </div>
-                 <div class="field">
-                   <label class="field__label" for="store">Где куплен</label>
-                   <input id="store" name="store" class="input" type="text" maxlength="100" list="stores" autocomplete="off" aria-describedby="store-hint" value="${escape(mine?.store ?? '')}" />
-                   <span class="field__hint muted" id="store-hint">необязательно</span>
-                   <datalist id="stores">${uniqueStores().map((s) => `<option value="${escape(s)}"></option>`).join('')}</datalist>
-                 </div>
-                 <div class="field">
-                   <label class="field__label" for="price">Цена, ₽</label>
-                   <input id="price" name="price" class="input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" aria-describedby="price-hint price-error" value="${mine?.price ?? ''}" />
-                   <span class="field__hint muted" id="price-hint">необязательно</span>
-                   <p class="field__error" id="price-error" hidden></p>
-                 </div>
-                 <p id="rate-error" class="form__error" role="alert" hidden></p>
-                 <div class="actions">
-                   <button class="btn btn--primary" type="submit" id="rate-submit">${mine ? 'Обновить оценку' : 'Сохранить оценку'}</button>
-                   ${mine ? '<button class="btn btn--ghost" type="button" id="rate-delete">Удалить оценку</button>' : ''}
-                 </div>
-               </form>`
+            ? rateFormHtml(mine, '', {
+                actions: mine ? '<button class="btn btn--ghost" type="button" id="rate-delete">Удалить оценку</button>' : '',
+              })
             : `<div class="rate__guest">
                  <p class="muted">Оценки могут ставить только вошедшие пользователи.</p>
                  <a class="btn btn--primary" href="#/login">Войдите, чтобы оценить</a>
@@ -442,6 +642,7 @@ function renderDrink(id) {
 
       <section class="drink-all">
         <h2 class="block__title">Все оценки · ${all.length}</h2>
+        ${takeAdminNotice()}
         ${
           all.length
             ? `<ol class="list">
@@ -457,6 +658,7 @@ function renderDrink(id) {
                       </span>
                     </a>
                     ${scoreBox(r.score, 'оценка')}
+                    ${ratingAdminHtml(r)}
                   </li>`,
                   )
                   .join('')}
@@ -555,72 +757,8 @@ function renderDrink(id) {
     });
   }
 
-  const form = document.getElementById('rate-form');
-  if (form) {
+  if (document.getElementById('rate-form')) {
     const error = document.getElementById('rate-error');
-    const slider = document.getElementById('score');
-    const shown = document.getElementById('score-value');
-    const statusEl = document.getElementById('rate-status');
-    const storeEl = document.getElementById('store');
-    const priceEl = document.getElementById('price');
-    const priceError = document.getElementById('price-error');
-    const saveBtn = document.getElementById('rate-submit');
-    let chosen = !!mine;
-    saveBtn.disabled = !chosen;
-    // Оценка «выбрана», только когда пользователь тронул ползунок: случайное значение по умолчанию не сохраняем.
-    const sliderBox = form.querySelector('.slider');
-    const ticks = sliderBox.querySelectorAll('.slider__ticks span');
-    // Заливка и цвет бегунка: --fill в процентах, --hue плавно идёт от красного (1) к зелёному (10).
-    const paint = (v) => {
-      const p = ((v - 1) / 9) * 100;
-      sliderBox.style.setProperty('--fill', `${p}%`);
-      sliderBox.style.setProperty('--fill-n', p);
-      sliderBox.style.setProperty('--tone', `var(--${v >= 8 ? 'high' : v >= 6 ? 'mid' : 'low'})`);
-      sliderBox.style.setProperty('--hue', Math.round(((v - 1) / 9) * 125));
-    };
-    paint(Number(slider.value));
-    // Статус: «Сохранено» / «Не сохранено» / «Есть несохранённые изменения» / «Оценка не выбрана» — без перерисовки страницы.
-    const refreshStatus = () => {
-      const changed =
-        !!mine &&
-        (Number(slider.value) !== mine.score ||
-          storeEl.value.trim() !== (mine.store ?? '') ||
-          priceEl.value.trim() !== String(mine.price ?? ''));
-      const state = mine ? (changed ? 'dirty' : 'saved') : chosen ? 'dirty' : 'none';
-      statusEl.dataset.state = state;
-      statusEl.textContent = state === 'saved' ? 'Сохранено' : state === 'none' ? 'Оценка не выбрана' : mine ? 'Есть несохранённые изменения' : 'Не сохранено';
-    };
-    const choose = () => {
-      const v = Number(slider.value);
-      chosen = true;
-      saveBtn.disabled = false;
-      sliderBox.classList.remove('slider--unset');
-      paint(v);
-      ticks.forEach((t) => t.classList.toggle('is-active', Number(t.dataset.v) === v));
-      shown.className = `slider__value ${scoreClass(v)}`;
-      shown.innerHTML = `<strong>${v}</strong> / 10`;
-      slider.setAttribute('aria-valuetext', `${v} из 10`);
-      refreshStatus();
-    };
-    ticks.forEach((t) =>
-      t.addEventListener('click', () => {
-        slider.value = t.dataset.v;
-        choose();
-      }),
-    );
-    slider.addEventListener('input', choose);
-    slider.addEventListener('change', choose);
-    slider.addEventListener('pointerdown', choose);
-    slider.addEventListener('keydown', (e) => {
-      if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End') setTimeout(choose);
-    });
-    storeEl.addEventListener('input', refreshStatus);
-    priceEl.addEventListener('input', () => {
-      priceError.hidden = true;
-      priceEl.removeAttribute('aria-invalid');
-      refreshStatus();
-    });
-    if (mine) slider.setAttribute('aria-valuetext', `${mine.score} из 10`);
     // После сохранения страница перерисовывается: возвращаем прокрутку и фокус, чтобы ничего не прыгало.
     const rerender = async (focusId) => {
       const y = window.scrollY;
@@ -628,38 +766,12 @@ function renderDrink(id) {
       window.scrollTo(0, y);
       document.getElementById(focusId)?.focus({ preventScroll: true });
     };
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      error.hidden = true;
-      priceError.hidden = true;
-      priceEl.removeAttribute('aria-invalid');
-      const data = new FormData(form);
-      const score = Number(data.get('score'));
-      if (!chosen || !score) return showError(error, { message: 'Выберите оценку от 1 до 10.' });
-      const priceRaw = String(data.get('price') || '').trim();
-      let price = null;
-      if (priceRaw) {
-        price = /^[0-9]{1,4}$/.test(priceRaw) ? Number(priceRaw) : NaN;
-        if (!(price >= 1 && price <= 5000)) {
-          priceError.textContent = 'Цена — целое число рублей от 1 до 5000.';
-          priceError.hidden = false;
-          priceEl.setAttribute('aria-invalid', 'true');
-          priceEl.focus();
-          return;
-        }
-      }
-      saveBtn.setAttribute('aria-busy', 'true');
-      await busy(form, async () => {
-        try {
-          await rate(id, score, String(data.get('store') || '').trim(), price);
-          notice = 'Оценка сохранена.';
-          await rerender('rate-submit');
-        } catch (err) {
-          showError(error, err);
-        }
-      });
-      saveBtn.removeAttribute('aria-busy');
+    mountRateForm('', mine, async (score, store, price) => {
+      await rate(id, score, store, price);
+      notice = 'Оценка сохранена.';
+      await rerender('rate-submit');
     });
+    const form = document.getElementById('rate-form');
     const delBtn = document.getElementById('rate-delete');
     delBtn?.addEventListener('click', async () => {
       error.hidden = true;
@@ -676,6 +788,7 @@ function renderDrink(id) {
       delBtn.removeAttribute('aria-busy');
     });
   }
+  bindRatingAdmin();
 }
 
 // Просмотр фото целиком. Закрывается по подложке, крестику, Esc и смене маршрута.
@@ -960,11 +1073,31 @@ function renderDrinkForm(drink) {
 
 // ---------- Мой профиль ----------
 
-function renderMe() {
-  const me = users.find((u) => u.id === currentUser().id) || currentUser();
+// Свой профиль (#/me) или, для администратора, чужой (#/u/<ник>/edit): nick — ник правимого участника.
+function renderMe(nick = null) {
+  const self = currentUser();
+  const me = nick === null ? users.find((u) => u.id === self.id) || self : users.find((u) => u.nick === nick);
+  if (nick !== null && !self.isAdmin) {
+    app.innerHTML = `
+      <section class="hero">
+        <h1>Нет доступа</h1>
+        <p><a class="link" href="#/u/${encodeURIComponent(nick)}">← К профилю</a></p>
+      </section>`;
+    return;
+  }
+  if (!me) {
+    app.innerHTML = `
+      <section class="hero">
+        <h1>Участник не найден</h1>
+        <p><a class="link" href="#/people">← Ко всем участникам</a></p>
+      </section>`;
+    return;
+  }
+  // Для чужого профиля запросы идут на админские маршруты.
+  const targetId = me.id === self.id ? undefined : me.id;
   app.innerHTML = `<div class="narrow">
-    <a class="link back" href="#/u/${encodeURIComponent(me.nick)}">← Мой профиль</a>
-    <section class="hero"><h1>Редактировать профиль</h1></section>
+    <a class="link back" href="#/u/${encodeURIComponent(me.nick)}">← ${targetId ? `Профиль ${displayName(me)}` : 'Мой профиль'}</a>
+    <section class="hero"><h1>${targetId ? `Редактировать профиль: ${displayName(me)}` : 'Редактировать профиль'}</h1></section>
     ${takeNotice()}
     <section class="profile">
       ${avatar(me).replace('avatar', 'avatar avatar--lg')}
@@ -1011,7 +1144,7 @@ function renderMe() {
     setSaving(avatarSubmit, true);
     await busy(avatarForm, async () => {
       try {
-        await uploadAvatar(avatarUp.blob);
+        await uploadAvatar(avatarUp.blob, targetId);
         avatarUp.destroy();
         notice = 'Аватарка обновлена.';
         await reload();
@@ -1025,7 +1158,7 @@ function renderMe() {
     busy(avatarForm, async () => {
       avatarError.hidden = true;
       try {
-        await deleteAvatar();
+        await deleteAvatar(targetId);
         notice = 'Аватарка убрана.';
         await reload();
       } catch (err) {
@@ -1056,7 +1189,7 @@ function renderMe() {
     setSaving(citySubmit, true);
     await busy(cityForm, async () => {
       try {
-        await updateProfile(name, city);
+        await updateProfile(name, city, targetId);
         notice = 'Профиль сохранён.';
         await reload();
       } catch (err) {
@@ -1211,11 +1344,12 @@ let scrollToRating = false;
 
 function route(scrollTop = true) {
   const hash = location.hash.replace(/^#/, '') || '/';
-  const profile = hash.match(/^\/u\/(.+)$/);
+  const profileEdit = hash.match(/^\/u\/([^/]+)\/edit$/);
+  const profile = profileEdit ? null : hash.match(/^\/u\/(.+)$/);
   const drinkPage = hash.match(/^\/d\/(\d{1,9})(\/edit)?$/);
   const isAuthPage = hash === '/login' || hash === '/register';
-  const needsLogin = hash === '/add' || hash === '/me' || !!drinkPage?.[2];
-  const tab = hash === '/people' || profile ? 'people' : isAuthPage || hash === '/me' ? null : 'drinks';
+  const needsLogin = hash === '/add' || hash === '/me' || !!profileEdit || !!drinkPage?.[2];
+  const tab = hash === '/people' || profile || profileEdit ? 'people' : isAuthPage || hash === '/me' ? null : 'drinks';
 
   tabs.forEach((t) => t.classList.toggle('tabs__item--active', t.dataset.tab === tab));
   if (!isAuthPage) returnTo = location.hash || '#/';
@@ -1237,6 +1371,7 @@ function route(scrollTop = true) {
   else if (profile) renderProfile(decodeURIComponent(profile[1]));
   else if (hash === '/add') renderDrinkForm(null);
   else if (hash === '/me') renderMe();
+  else if (profileEdit) renderMe(decodeURIComponent(profileEdit[1]));
   else if (drinkPage) {
     const id = Number(drinkPage[1]);
     if (drinkPage[2]) {
