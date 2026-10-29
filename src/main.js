@@ -35,7 +35,11 @@ const scoreBox = (value, caption) => `
   </div>`;
 
 const can = (drink) => `<span class="card__can" style="--can:${drink.color}" aria-hidden="true"></span>`;
-const avatar = (user) => `<span class="avatar" aria-hidden="true">${escape(user.nick[0].toUpperCase())}</span>`;
+// Картинка, если задан avatar, иначе кружок с первой буквой ника.
+const avatar = (user) =>
+  `<span class="avatar" aria-hidden="true">${
+    user.avatar ? `<img src="${escape(user.avatar)}" alt="" />` : escape(user.nick[0].toUpperCase())
+  }</span>`;
 
 // ---------- Подсчёты ----------
 
@@ -142,7 +146,7 @@ function renderPeople() {
               ${avatar(u)}
               <div class="card__body">
                 <h2 class="card__name">${escape(u.nick)}</h2>
-                <p class="card__meta"><span>средняя оценка ${formatScore(u.avg === null ? null : Math.round(u.avg * 10) / 10)}</span></p>
+                <p class="card__meta"><span>${[u.city && escape(u.city), `средняя оценка ${formatScore(u.avg === null ? null : Math.round(u.avg * 10) / 10)}`].filter(Boolean).join(' · ')}</span></p>
               </div>
               <div class="score">
                 <strong>${u.votes}</strong>
@@ -181,6 +185,7 @@ function renderProfile(nick) {
       ${avatar(user).replace('avatar', 'avatar avatar--lg')}
       <div>
         <h1 class="profile__nick">${escape(user.nick)}</h1>
+        ${user.city ? `<p class="muted profile__city">${escape(user.city)}</p>` : ''}
         <p class="muted profile__stats">
           ${votesLabel(own.length)} · средняя ${avg === null ? '—' : avg.toFixed(1)}
         </p>
@@ -197,7 +202,7 @@ function renderProfile(nick) {
                   ${can(r.drink)}
                   <div class="card__body">
                     <h2 class="card__name">${escape(r.drink.name)}</h2>
-                    <p class="card__meta"><span>у всех в среднем ${all.toFixed(1)}</span></p>
+                    <p class="card__meta"><span>${[`у всех в среднем ${all.toFixed(1)}`, r.store && `куплен: ${escape(r.store)}`].filter(Boolean).join(' · ')}</span></p>
                   </div>
                   ${scoreBox(r.score, 'оценка')}
                 </li>`;
