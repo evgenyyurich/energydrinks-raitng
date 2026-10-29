@@ -10,29 +10,17 @@
   <body>
     <header class="topbar">
       <div class="topbar__inner">
-        <a class="logo" href="/">⚡ Энергетики</a>
-        <button class="btn btn--ghost" type="button" disabled title="Появится в v0.3">Войти</button>
+        <a class="logo" href="#/">⚡ Энергетики</a>
+        <button class="btn btn--ghost" type="button" disabled title="Скоро">Войти</button>
       </div>
     </header>
 
     <main class="container">
-      <section class="hero">
-        <h1>Рейтинг энергетиков</h1>
-        <p class="muted">Оценки от меня и друзей. Средний балл по всем, кто попробовал.</p>
-      </section>
-
-      <section class="controls">
-        <input id="search" class="input" type="search" placeholder="Поиск по названию или бренду" autocomplete="off" />
-        <select id="sort" class="input">
-          <option value="rating">По рейтингу</option>
-          <option value="votes">По числу оценок</option>
-          <option value="name">По названию</option>
-          <option value="caffeine">По кофеину</option>
-        </select>
-      </section>
-
-      <ol id="list" class="list"></ol>
-      <p id="empty" class="muted empty" hidden>Ничего не нашлось.</p>
+      <nav class="tabs" aria-label="Разделы">
+        <a class="tabs__item" href="#/" data-tab="drinks">Энергетики</a>
+        <a class="tabs__item" href="#/people" data-tab="people">Участники</a>
+      </nav>
+      <div id="app"></div>
     </main>
 
     <script type="module" src="/src/main.js"></script>
