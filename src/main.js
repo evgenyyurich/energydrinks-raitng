@@ -315,12 +315,16 @@ function renderDrink(id) {
   const owner = !!me && (drink.createdBy === me.id || !!me.isAdmin);
 
   app.innerHTML = `
+    <div class="drink-top">
+    ${drink.image ? `<div class="drink-bg" aria-hidden="true"><div style="background-image:url('${escape(drink.image)}')"></div></div>` : ''}
     <a class="link back" href="#/">← Все энергетики</a>
     ${takeNotice()}
     <section class="drink">
-      <div class="drink__photo">
-        ${drink.image ? `<img src="${escape(drink.image)}" alt="${escape(drink.name)}" />` : bigCan(drink)}
-      </div>
+      ${
+        drink.image
+          ? `<button type="button" class="drink__photo drink__photo--zoom" id="photo-open" aria-label="Открыть фото"><img src="${escape(drink.image)}" alt="${escape(drink.name)}" /></button>`
+          : `<div class="drink__photo">${bigCan(drink)}</div>`
+      }
       <div class="drink__info">
         <h1 class="drink__name">${escape(drink.name)}</h1>
         <p class="muted drink__brand">${escape(drink.brand)}</p>
@@ -370,6 +374,7 @@ function renderDrink(id) {
           : '<p><a class="btn btn--primary" href="#/login">Войдите, чтобы оценить</a></p>'
       }
     </section>
+    </div>
 
     <section class="block">
       <h2 class="block__title">Все оценки · ${all.length}</h2>
@@ -395,6 +400,8 @@ function renderDrink(id) {
           : '<p class="muted empty">Пока никто не оценил.</p>'
       }
     </section>`;
+
+  document.getElementById('photo-open')?.addEventListener('click', (e) => openLightbox(drink.image, drink.name, e.currentTarget));
 
   const form = document.getElementById('rate-form');
   if (form) {
@@ -497,6 +504,38 @@ function renderDrink(id) {
       e.target.disabled = false;
     }
   });
+}
+
+// Просмотр фото целиком. Закрывается по подложке, крестику, Esc и смене маршрута.
+function openLightbox(src, name, opener) {
+  const box = document.createElement('div');
+  box.className = 'lightbox';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-modal', 'true');
+  box.setAttribute('aria-label', name);
+  box.innerHTML = `<img src="${escape(src)}" alt="${escape(name)}" /><button type="button" class="lightbox__close" aria-label="Закрыть">×</button>`;
+  const close = () => {
+    document.removeEventListener('keydown', onKey);
+    window.removeEventListener('hashchange', close);
+    document.body.classList.remove('no-scroll');
+    box.remove();
+    if (opener.isConnected) opener.focus();
+  };
+  const onKey = (e) => {
+    if (e.key === 'Escape') close();
+    else if (e.key === 'Tab') {
+      e.preventDefault();
+      box.querySelector('.lightbox__close').focus();
+    }
+  };
+  box.addEventListener('click', (e) => {
+    if (e.target !== box.querySelector('img')) close();
+  });
+  document.addEventListener('keydown', onKey);
+  window.addEventListener('hashchange', close);
+  document.body.classList.add('no-scroll');
+  document.body.append(box);
+  box.querySelector('.lightbox__close').focus();
 }
 
 // ---------- Добавление и правка энергетика ----------
