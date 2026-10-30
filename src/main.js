@@ -31,6 +31,7 @@ const plural = (n, one, few, many) => {
   return `${n} ${many}`;
 };
 const votesLabel = (n) => plural(n, 'оценка', 'оценки', 'оценок');
+const drinksLabel = (n) => plural(n, 'энергетик', 'энергетика', 'энергетиков');
 
 const scoreClass = (value) => {
   if (value === null) return 'score--none';
@@ -249,6 +250,7 @@ function renderProfile(nick) {
     .map((r) => ({ ...r, drink: drinks.find((d) => d.id === r.drinkId) }))
     .sort((a, b) => b.score - a.score || a.drink.name.localeCompare(b.drink.name, 'ru'));
   const avg = average(own.map((r) => r.score));
+  const addedCount = drinks.filter((d) => d.createdBy === user.id).length;
 
   app.innerHTML = `
     <a class="link back" href="#/people">← Все участники</a>
@@ -260,7 +262,7 @@ function renderProfile(nick) {
         ${user.name ? `<p class="muted profile__handle">@${escape(user.nick)}</p>` : ''}
         ${user.city ? `<p class="muted profile__city">${escape(user.city)}</p>` : ''}
         <p class="muted profile__stats">
-          ${votesLabel(own.length)} · средняя ${avg === null ? '—' : avg.toFixed(1)}
+          ${votesLabel(own.length)} · средняя ${avg === null ? '—' : avg.toFixed(1)}${addedCount ? ` · добавлено ${drinksLabel(addedCount)}` : ''}
         </p>
         ${
           currentUser()?.id === user.id
